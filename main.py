@@ -8,7 +8,14 @@ from datetime import datetime
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", 0))  # Discord Channel ID
 
-bot = commands.Bot(command_prefix="!")
+import discord
+from discord.ext import commands
+
+intents = discord.Intents.default()
+intents.message_content = True  # Wenn dein Bot auf Nachrichteninhalt reagieren soll
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+
 
 last_stoerungen = set()
 
