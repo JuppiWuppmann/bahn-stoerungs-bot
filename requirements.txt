@@ -1,3 +1,4 @@
 discord.py
-requests
+playwright
 beautifulsoup4
+flask
