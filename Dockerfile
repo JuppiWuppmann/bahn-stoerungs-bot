@@ -1,7 +1,9 @@
 FROM python:3.11-slim
 
-# Playwright dependencies installieren (wichtig!)
+# System-Abhängigkeiten für Playwright und Node.js installieren
 RUN apt-get update && apt-get install -y \
+    curl \
+    gnupg \
     libnss3 \
     libatk1.0-0 \
     libatk-bridge2.0-0 \
@@ -13,22 +15,29 @@ RUN apt-get update && apt-get install -y \
     libxkbcommon0 \
     libasound2 \
     libpangocairo-1.0-0 \
-    libatk-bridge2.0-0 \
     libgtk-3-0 \
     libdrm2 \
     libdbus-1-3 \
     libxss1 \
     libcurl4 \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# Arbeitsverzeichnis setzen
 WORKDIR /app
 
-COPY requirements.txt requirements.txt
-RUN pip install -r requirements.txt
+# Python-Abhängigkeiten installieren
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Playwright Browser installieren
-RUN playwright install
+# Playwright installieren (über pip)
+RUN pip install playwright
 
+# Playwright-Browser herunterladen
+RUN playwright install chromium
+
+# Projektdateien kopieren
 COPY . .
 
+# Startbefehl
 CMD ["python", "main.py"]
