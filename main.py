@@ -6,14 +6,6 @@ from playwright.async_api import async_playwright
 import discord
 from discord.ext import commands
 from aiohttp import web
-import debugpy  # Debugger
-
-# Debugger aktivieren (wartet auf VSCode-Verbindung)
-if os.getenv("DEBUG", "0") == "1":
-    debugpy.listen(("0.0.0.0", 5678))
-    print("⏳ Warte auf Debugger-Verbindung...")
-    debugpy.wait_for_client()
-    print("🐞 Debugger verbunden!")
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
@@ -113,4 +105,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
