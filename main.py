@@ -5,7 +5,6 @@ from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 import discord
 from discord.ext import commands
-from aiohttp import web  # Webserver importieren
 
 # Token und Channel-ID aus Umgebungsvariablen laden
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -13,7 +12,7 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
 # Discord-Bot mit passenden Intents starten
 intents = discord.Intents.default()
-intents.message_content = True  # Damit Bot Nachrichten lesen kann (abhängig von Bot-Settings)
+intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -25,33 +24,38 @@ async def scrape_stoerungen():
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
             await page.goto("https://strecken-info.de/", timeout=60000)
-            
-            # Warte, bis die Störungsmeldungen sichtbar sind
-            await page.wait_for_selector("div.freiefahrt-1knyh61", timeout=30000)
-            
+
+            # Warte auf mind. eine Art von Störung
+            await page.wait_for_selector("div.freiefahrt-1knyh61, div.freiefahrt-1lyxvt5", timeout=30000)
+
             html = await page.content()
             await browser.close()
-            
+
             soup = BeautifulSoup(html, "html.parser")
             stoerungen = []
-            
+
+            # Großstörungen
             for div in soup.select("div.freiefahrt-1knyh61"):
-                titel_el = div.select_one("div.freiefahrt-1g6bf03")
-                titel = titel_el.text.strip() if titel_el else "Keine Info"
-                
-                beschr_el = div.select_one("div.freiefahrt-12znh6")
-                beschreibung = beschr_el.text.strip() if beschr_el else "Keine Beschreibung"
-                
-                unique_id = titel + beschreibung
-                
-                stoerungen.append({
-                    "titel": titel,
-                    "beschreibung": beschreibung,
-                    "unique_id": unique_id
-                })
-            
+                text = div.get_text(strip=True)
+                if text:
+                    stoerungen.append({
+                        "titel": "Großstörung",
+                        "beschreibung": text,
+                        "unique_id": f"gross_{text}"
+                    })
+
+            # Streckenstörungen
+            for div in soup.select("div.freiefahrt-1lyxvt5"):
+                text = div.get_text(strip=True)
+                if text:
+                    stoerungen.append({
+                        "titel": "Streckenstörung",
+                        "beschreibung": text,
+                        "unique_id": f"strecke_{text}"
+                    })
+
             return stoerungen
-    
+
     except Exception as e:
         print(f"[{datetime.now()}] ❌ Fehler beim Scrapen: {e}")
         return []
@@ -78,7 +82,7 @@ async def check_stoerungen():
             for s in stoerungen:
                 if s["unique_id"] not in last_stoerungen:
                     last_stoerungen.add(s["unique_id"])
-                    nachricht = f"🚨 **Störung:** {s['titel']}\n{s['beschreibung']}"
+                    nachricht = f"🚨 **{s['titel']}**\n{s['beschreibung']}"
                     try:
                         await channel.send(nachricht)
                         print(f"[{datetime.now()}] ✅ Neue Störung gesendet.")
@@ -87,30 +91,11 @@ async def check_stoerungen():
         
         await asyncio.sleep(600)  # alle 10 Minuten prüfen
 
-# Neuer Webserver-Handler
-async def handle(request):
-    return web.Response(text="Bot läuft!")
-
-# Funktion zum Webserver starten
-async def run_webserver():
-    app = web.Application()
-    app.add_routes([web.get('/', handle)])
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.getenv("PORT", "10000"))  # Render setzt PORT meist automatisch
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    print(f"🌐 Webserver läuft auf Port {port}")
-
 async def main():
     if DISCORD_TOKEN is None or CHANNEL_ID == 0:
         print("❌ DISCORD_TOKEN oder CHANNEL_ID sind nicht gesetzt!")
         return
-    # Bot und Webserver parallel starten
-    await asyncio.gather(
-        bot.start(DISCORD_TOKEN),
-        run_webserver()
-    )
+    await bot.start(DISCORD_TOKEN)
 
 if __name__ == "__main__":
     asyncio.run(main())
