@@ -5,13 +5,12 @@ from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 import discord
 from discord.ext import commands
-from aiohttp import web  # <- Mini-Webserver für Render
+from aiohttp import web
 
-# Token und Channel-ID aus Umgebungsvariablen laden
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
-# Mini-Webserver für Render (um Ports zu binden)
+# Mini-Webserver für Render
 async def handle_health(request):
     return web.Response(text="OK")
 
@@ -24,9 +23,8 @@ async def start_web_server():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"🌐 Fake-Webserver läuft auf Port {port}")
+    print(f"🌐 Webserver läuft auf Port {port}")
 
-# Discord-Bot mit passenden Intents starten
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -39,14 +37,18 @@ async def scrape_stoerungen():
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
             await page.goto("https://strecken-info.de/", timeout=60000)
-            await page.wait_for_selector("div.freiefahrt-1knyh61", timeout=30000)
+
+            # Warte auf beide Arten von Störungen
+            await page.wait_for_selector("div.freiefahrt-1knyh61, div.freiefahrt-1lyxvt5", timeout=30000)
+
             html = await page.content()
             await browser.close()
 
             soup = BeautifulSoup(html, "html.parser")
             stoerungen = []
 
-            for div in soup.select("div.freiefahrt-1knyh61"):
+            # Störungen aus beiden bekannten Klassen sammeln
+            for div in soup.select("div.freiefahrt-1knyh61, div.freiefahrt-1lyxvt5"):
                 titel_el = div.select_one("div.freiefahrt-1g6bf03")
                 titel = titel_el.text.strip() if titel_el else "Keine Info"
 
@@ -61,6 +63,7 @@ async def scrape_stoerungen():
                     "unique_id": unique_id
                 })
 
+            print(f"[{datetime.now()}] 🔍 {len(stoerungen)} Störungen gefunden.")
             return stoerungen
 
     except Exception as e:
@@ -103,10 +106,9 @@ async def main():
         return
 
     await asyncio.gather(
-        start_web_server(),  # <- Webserver starten
-        bot.start(DISCORD_TOKEN)  # <- Bot starten
+        start_web_server(),
+        bot.start(DISCORD_TOKEN)
     )
 
 if __name__ == "__main__":
     asyncio.run(main())
-
