@@ -38,17 +38,24 @@ async def scrape_stoerungen():
             page = await browser.new_page()
             await page.goto("https://strecken-info.de/", timeout=60000)
 
-            # Warte auf beide Arten von Störungen
+            # Warte auf eine bekannte Störungs-Klasse
             await page.wait_for_selector("div.freiefahrt-1knyh61, div.freiefahrt-1lyxvt5", timeout=30000)
 
             html = await page.content()
             await browser.close()
 
             soup = BeautifulSoup(html, "html.parser")
-            print([div.get("class") for div in soup.find_all("div")][:20])
+
+            # 🧪 DEBUG: Zeige die ersten 10 DIVs mit Klassen und Text
+            debug_output = []
+            for div in soup.find_all("div")[:10]:
+                klasse = div.get("class")
+                text = div.get_text(strip=True)[:80]
+                debug_output.append((klasse, text))
+            print("🔍 DEBUG-VORSCHAU:", debug_output)
+
             stoerungen = []
 
-            # Störungen aus beiden bekannten Klassen sammeln
             for div in soup.select("div.freiefahrt-1knyh61, div.freiefahrt-1lyxvt5"):
                 titel_el = div.select_one("div.freiefahrt-1g6bf03")
                 titel = titel_el.text.strip() if titel_el else "Keine Info"
