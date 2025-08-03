@@ -6,9 +6,9 @@ RUN apt-get update && apt-get install -y \
     libxss1 libcurl4 libglib2.0-0 \
     libgtk-4-1 libgraphene-1.0-0 libgstreamer-gl1.0-0 libgstreamer-plugins-base1.0-0 \
     libenchant-2-2 libsecret-1-0 libgles2-mesa libsndfile1 libpulse0 \
-    libatomic1 libxslt1.1 libwoff2dec1 libvpx6 libevent-2.1-7 \
+    libatomic1 libxslt1.1 libwoff2-1 libvpx7 libevent-2.1-7 \
     libflite1 libwebpdemux2 libavif15 libharfbuzz-icu0 libwebpmux3 libhyphen0 \
-    libx264-155 \
+    libx264-163 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
