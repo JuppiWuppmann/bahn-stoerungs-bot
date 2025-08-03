@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 import discord
 from discord.ext import commands
+from aiohttp import web  # Webserver importieren
 
 # Token und Channel-ID aus Umgebungsvariablen laden
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -86,12 +87,30 @@ async def check_stoerungen():
         
         await asyncio.sleep(600)  # alle 10 Minuten prüfen
 
+# Neuer Webserver-Handler
+async def handle(request):
+    return web.Response(text="Bot läuft!")
+
+# Funktion zum Webserver starten
+async def run_webserver():
+    app = web.Application()
+    app.add_routes([web.get('/', handle)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", "10000"))  # Render setzt PORT meist automatisch
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"🌐 Webserver läuft auf Port {port}")
+
 async def main():
     if DISCORD_TOKEN is None or CHANNEL_ID == 0:
         print("❌ DISCORD_TOKEN oder CHANNEL_ID sind nicht gesetzt!")
         return
-    await bot.start(DISCORD_TOKEN)
+    # Bot und Webserver parallel starten
+    await asyncio.gather(
+        bot.start(DISCORD_TOKEN),
+        run_webserver()
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
-
