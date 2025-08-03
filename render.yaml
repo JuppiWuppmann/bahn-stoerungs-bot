@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: bahn-stoerungs-bot
+    env: docker
+    plan: free
+    autoDeploy: true
