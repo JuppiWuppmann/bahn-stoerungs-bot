@@ -6,12 +6,18 @@ from playwright.async_api import async_playwright
 import discord
 from discord.ext import commands
 from aiohttp import web
-import debugpy
+import debugpy  # Debugger
+
+# Debugger aktivieren (wartet auf VSCode-Verbindung)
+if os.getenv("DEBUG", "0") == "1":
+    debugpy.listen(("0.0.0.0", 5678))
+    print("⏳ Warte auf Debugger-Verbindung...")
+    debugpy.wait_for_client()
+    print("🐞 Debugger verbunden!")
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
-# Mini-Webserver für Healthcheck
 async def handle_health(request):
     return web.Response(text="OK")
 
@@ -38,32 +44,18 @@ async def scrape_stoerungen():
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
             await page.goto("https://strecken-info.de/", timeout=60000)
-
-            # Warte auf eine bekannte Störungs-Klasse
             await page.wait_for_selector("div.freiefahrt-1knyh61, div.freiefahrt-1lyxvt5", timeout=30000)
-
             html = await page.content()
             await browser.close()
 
             soup = BeautifulSoup(html, "html.parser")
-
-            # 🧪 DEBUG: Zeige die ersten 10 DIVs mit Klassen und Text
-            debug_output = []
-            for div in soup.find_all("div")[:10]:
-                klasse = div.get("class")
-                text = div.get_text(strip=True)[:80]
-                debug_output.append((klasse, text))
-            print("🔍 DEBUG-VORSCHAU:", debug_output)
-
             stoerungen = []
 
             for div in soup.select("div.freiefahrt-1knyh61, div.freiefahrt-1lyxvt5"):
                 titel_el = div.select_one("div.freiefahrt-1g6bf03")
                 titel = titel_el.text.strip() if titel_el else "Keine Info"
-
                 beschr_el = div.select_one("div.freiefahrt-12znh6")
                 beschreibung = beschr_el.text.strip() if beschr_el else "Keine Beschreibung"
-
                 unique_id = titel + beschreibung
 
                 stoerungen.append({
@@ -110,12 +102,6 @@ async def check_stoerungen():
         await asyncio.sleep(600)
 
 async def main():
-    # Debugger starten und auf VSCode warten
-    debugpy.listen(("0.0.0.0", 5678))
-    print("⏳ Warte auf Debugger-Verbindung am Port 5678...")
-    debugpy.wait_for_client()
-    print("✅ Debugger verbunden, starte Programm.")
-
     if DISCORD_TOKEN is None or CHANNEL_ID == 0:
         print("❌ DISCORD_TOKEN oder CHANNEL_ID sind nicht gesetzt!")
         return
@@ -127,3 +113,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
