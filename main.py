@@ -6,11 +6,12 @@ from playwright.async_api import async_playwright
 import discord
 from discord.ext import commands
 from aiohttp import web
+import debugpy
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
-# Mini-Webserver für Render
+# Mini-Webserver für Healthcheck
 async def handle_health(request):
     return web.Response(text="OK")
 
@@ -109,6 +110,12 @@ async def check_stoerungen():
         await asyncio.sleep(600)
 
 async def main():
+    # Debugger starten und auf VSCode warten
+    debugpy.listen(("0.0.0.0", 5678))
+    print("⏳ Warte auf Debugger-Verbindung am Port 5678...")
+    debugpy.wait_for_client()
+    print("✅ Debugger verbunden, starte Programm.")
+
     if DISCORD_TOKEN is None or CHANNEL_ID == 0:
         print("❌ DISCORD_TOKEN oder CHANNEL_ID sind nicht gesetzt!")
         return
