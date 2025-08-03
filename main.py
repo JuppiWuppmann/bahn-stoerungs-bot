@@ -45,6 +45,7 @@ async def scrape_stoerungen():
             await browser.close()
 
             soup = BeautifulSoup(html, "html.parser")
+            print([div.get("class") for div in soup.find_all("div")][:20])
             stoerungen = []
 
             # Störungen aus beiden bekannten Klassen sammeln
