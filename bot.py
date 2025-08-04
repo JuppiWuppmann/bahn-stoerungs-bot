@@ -7,9 +7,11 @@ import discord
 from discord.ext import commands
 from aiohttp import web
 
+# 🔐 Discord-Variablen
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
+# 🌐 Healthcheck für Render & UptimeRobot
 async def handle_health(request):
     return web.Response(text="OK")
 
@@ -24,30 +26,36 @@ async def start_web_server():
     await site.start()
     print(f"🌐 Webserver läuft auf Port {port}")
 
+# 📣 Discord-Bot starten
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 last_stoerungen = set()
 
+# 🔍 Scraper
 async def scrape_stoerungen():
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
+            print("🌐 Lade strecken-info.de...")
             await page.goto("https://strecken-info.de/", timeout=60000)
-            await page.wait_for_selector("div.freiefahrt-1knyh61, div.freiefahrt-1lyxvt5", timeout=30000)
+            await page.wait_for_selector("div[class*='freiefahrt']", timeout=30000)
             html = await page.content()
             await browser.close()
 
             soup = BeautifulSoup(html, "html.parser")
             stoerungen = []
 
-            for div in soup.select("div.freiefahrt-1knyh61, div.freiefahrt-1lyxvt5"):
-                titel_el = div.select_one("div.freiefahrt-1g6bf03")
-                titel = titel_el.text.strip() if titel_el else "Keine Info"
-                beschr_el = div.select_one("div.freiefahrt-12znh6")
-                beschreibung = beschr_el.text.strip() if beschr_el else "Keine Beschreibung"
+            # Suche alle relevanten Störungs-Blöcke
+            for div in soup.select("div[class*='freiefahrt']"):
+                text = div.get_text(strip=True, separator=" ")
+                if not text or len(text) < 20:
+                    continue
+
+                titel = text.split(".")[0][:100]
+                beschreibung = text
                 unique_id = titel + beschreibung
 
                 stoerungen.append({
@@ -63,11 +71,18 @@ async def scrape_stoerungen():
         print(f"[{datetime.now()}] ❌ Fehler beim Scrapen: {e}")
         return []
 
+# 📥 Bot ready
 @bot.event
 async def on_ready():
     print(f"🤖 Bot ist online als {bot.user}")
+    channel = bot.get_channel(CHANNEL_ID)
+    if channel:
+        await channel.send("✅ Bahn-Störungs-Bot wurde gestartet!")
+    else:
+        print("❌ Channel nicht gefunden!")
     bot.loop.create_task(check_stoerungen())
 
+# 🔁 Störungen überwachen
 async def check_stoerungen():
     await bot.wait_until_ready()
     channel = bot.get_channel(CHANNEL_ID)
@@ -85,14 +100,21 @@ async def check_stoerungen():
             for s in stoerungen:
                 if s["unique_id"] not in last_stoerungen:
                     last_stoerungen.add(s["unique_id"])
-                    nachricht = f"🚨 **Störung:** {s['titel']}\n{s['beschreibung']}"
+                    # Nachricht schön formatieren
+                    beschreibung_formatiert = s['beschreibung'].replace(". ", ".\n")
+                    nachricht = (
+                        "🚨 **Neue Bahn-Störung entdeckt!**\n\n"
+                        f"**Titel:** {s['titel']}\n\n"
+                        f"**Details:**\n{beschreibung_formatiert}"
+                    )
                     try:
                         await channel.send(nachricht)
                         print(f"[{datetime.now()}] ✅ Neue Störung gesendet.")
                     except Exception as e:
                         print(f"❌ Fehler beim Senden an Discord: {e}")
-        await asyncio.sleep(600)
+        await asyncio.sleep(600)  # alle 10 Minuten prüfen
 
+# 🔁 Hauptfunktion
 async def main():
     if DISCORD_TOKEN is None or CHANNEL_ID == 0:
         print("❌ DISCORD_TOKEN oder CHANNEL_ID sind nicht gesetzt!")
