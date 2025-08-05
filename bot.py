@@ -65,15 +65,16 @@ async def scrape_stoerungen():
             print("🌐 Öffne strecken-info.de ...")
             await page.goto("https://strecken-info.de/", timeout=60000)
 
-          # Pop-up "Züge rollen" schließen
-    try:
-        close_button = await page.query_selector("button:has-text('OK')")
-        if close_button:
-            await close_button.click()
-            print("✅ 'Züge rollen'-Pop-up geschlossen.")
-    except Exception as e:
-        print("⚠️ Kein Pop-up oder Fehler beim Schließen:", e)
-
+            # Pop-up "Züge teilen" schließen, falls vorhanden
+            try:
+                close_button = await page.query_selector("div[role='dialog'] button[aria-label='Schließen']")
+                if close_button:
+                    await close_button.click()
+                    print("✅ 'Züge teilen'-Pop-up geschlossen.")
+                else:
+                    print("ℹ️ Kein Pop-up zum Schließen gefunden.")
+            except Exception as e:
+                print("⚠️ Fehler beim Schließen des Pop-ups:", e)
 
             # Einschränkungen-Tab klicken
             try:
