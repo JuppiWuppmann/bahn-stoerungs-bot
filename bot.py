@@ -20,7 +20,7 @@ async def start_web_server():
     port = int(os.environ.get("PORT", 8080))
     app = web.Application()
     app.router.add_get("/", handle_health)
-    app.router.add_get("/healthz", handle_health)
+    app.router.add_get("/healthz", handle_health)  # korrigiert 'healthz'
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
@@ -65,16 +65,21 @@ async def scrape_stoerungen():
             print("🌐 Öffne strecken-info.de ...")
             await page.goto("https://strecken-info.de/", timeout=60000)
 
-            # Pop-up "Züge teilen" schließen, falls vorhanden
+            # --- Popup "Züge teilen" schließen ---
             try:
-                close_button = await page.query_selector("div[role='dialog'] button[aria-label='Schließen']")
+                # Versuche verschiedene mögliche Selektoren für das X-Button
+                close_button = await page.query_selector(
+                    "button[aria-label='Schließen'], button:has-text('×'), button:has-text('X')"
+                )
                 if close_button:
                     await close_button.click()
-                    print("✅ 'Züge teilen'-Pop-up geschlossen.")
+                    print("✅ Popup 'Züge teilen' geschlossen.")
+                    # Optional: Warte kurz, bis Popup komplett weg ist
+                    await page.wait_for_timeout(1000)
                 else:
-                    print("ℹ️ Kein Pop-up zum Schließen gefunden.")
+                    print("ℹ️ Popup 'Züge teilen' nicht gefunden, evtl. schon geschlossen.")
             except Exception as e:
-                print("⚠️ Fehler beim Schließen des Pop-ups:", e)
+                print("⚠️ Fehler beim Schließen des Popups:", e)
 
             # Einschränkungen-Tab klicken
             try:
@@ -211,3 +216,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
