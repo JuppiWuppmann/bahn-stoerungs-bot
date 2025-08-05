@@ -20,7 +20,7 @@ async def start_web_server():
     port = int(os.environ.get("PORT", 8080))
     app = web.Application()
     app.router.add_get("/", handle_health)
-    app.router.add_get("/healthz", handle_health)  # korrigiert 'healthz'
+    app.router.add_get("/healthz", handle_health)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
@@ -67,23 +67,31 @@ async def scrape_stoerungen():
 
             # --- Popup "Züge teilen" schließen ---
             try:
-                # Versuche verschiedene mögliche Selektoren für das X-Button
                 close_button = await page.query_selector(
                     "button[aria-label='Schließen'], button:has-text('×'), button:has-text('X')"
                 )
                 if close_button:
                     await close_button.click()
                     print("✅ Popup 'Züge teilen' geschlossen.")
-                    # Optional: Warte kurz, bis Popup komplett weg ist
-                    await page.wait_for_timeout(1000)
+                    await page.wait_for_timeout(1500)  # kurz warten, bis Popup verschwindet
                 else:
                     print("ℹ️ Popup 'Züge teilen' nicht gefunden, evtl. schon geschlossen.")
             except Exception as e:
                 print("⚠️ Fehler beim Schließen des Popups:", e)
 
+            # Sicherstellen, dass Popup weg ist
+            try:
+                popup = await page.query_selector("div[role='dialog'], div.popup")
+                if popup:
+                    print("⚠️ Popup ist noch da, warte nochmal...")
+                    await asyncio.sleep(2)
+            except:
+                pass
+
             # Einschränkungen-Tab klicken
             try:
-                await page.click("text=Einschränkungen", timeout=10000)
+                await page.wait_for_selector("text=Einschränkungen", timeout=15000)
+                await page.click("text=Einschränkungen")
                 print("✅ Einschränkungen-Tab geöffnet.")
             except Exception as e:
                 print("❌ Fehler beim Klicken auf 'Einschränkungen':", e)
@@ -148,6 +156,7 @@ async def scrape_stoerungen():
                 })
 
             print(f"[{datetime.now()}] ✅ {len(stoerungen)} Störungen erkannt.")
+            await browser.close()
             return stoerungen
 
     except Exception as e:
@@ -216,4 +225,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
