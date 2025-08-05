@@ -7,12 +7,12 @@ from discord.ext import commands
 from aiohttp import web
 from io import BytesIO
 
-# 🔐 Discord
+# 🔐 Discord Konfiguration
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 ADMIN_ID = os.getenv("ADMIN_ID")  # optional
 
-# 🌐 Render/UptimeRobot Healthcheck
+# 🌐 Healthcheck
 async def handle_health(request):
     return web.Response(text="OK")
 
@@ -35,19 +35,17 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 last_stoerungen = set()
 last_check_time = None
 
-# 📸 Screenshot-Funktion
+# 📸 Screenshot senden bei Fehler
 async def send_screenshot(page, fehlertext="Fehler"):
     try:
         channel = bot.get_channel(CHANNEL_ID)
         if channel is None:
-            print("⚠️ Screenshot nicht gesendet – Channel nicht gefunden.")
+            print("⚠️ Channel nicht gefunden.")
             return
-
         screenshot_bytes = await page.screenshot(type="png")
         buffer = BytesIO(screenshot_bytes)
         buffer.name = "screenshot.png"
         buffer.seek(0)
-
         await channel.send(
             content=f"❌ **Fehler beim Scraping:** {fehlertext}",
             file=discord.File(fp=buffer, filename="screenshot.png")
@@ -55,71 +53,58 @@ async def send_screenshot(page, fehlertext="Fehler"):
     except Exception as e:
         print("⚠️ Fehler beim Screenshot-Senden:", e)
 
-# 🔍 Scraper
+# 🔍 Scraping Funktion
 async def scrape_stoerungen():
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(viewport={"width": 1280, "height": 1024})
             page = await context.new_page()
-            print("🌐 Öffne strecken-info.de ...")
+            print("🌐 Lade Website...")
             await page.goto("https://strecken-info.de/", timeout=60000)
 
-            # --- Popup "Züge teilen" schließen ---
+            # Pop-up schließen (falls sichtbar)
             try:
-                close_button = await page.query_selector(
-                    "button[aria-label='Schließen'], button:has-text('×'), button:has-text('X')"
-                )
-                if close_button:
-                    await close_button.click()
-                    print("✅ Popup 'Züge teilen' geschlossen.")
-                    await page.wait_for_timeout(1500)  # kurz warten, bis Popup verschwindet
-                else:
-                    print("ℹ️ Popup 'Züge teilen' nicht gefunden, evtl. schon geschlossen.")
+                close_btn = await page.query_selector("button[aria-label='Schließen']")
+                if close_btn:
+                    await close_btn.click()
+                    print("✅ Pop-up geschlossen.")
             except Exception as e:
-                print("⚠️ Fehler beim Schließen des Popups:", e)
+                print("⚠️ Kein Pop-up oder Fehler beim Schließen:", e)
 
-            # Sicherstellen, dass Popup weg ist
+            # Filter: Baustellen und Streckenruhen deaktivieren
             try:
-                popup = await page.query_selector("div[role='dialog'], div.popup")
-                if popup:
-                    print("⚠️ Popup ist noch da, warte nochmal...")
-                    await asyncio.sleep(2)
-            except:
-                pass
+                await page.click("text=Filter", timeout=10000)
+                await asyncio.sleep(1)
 
-            # Einschränkungen-Tab klicken
-            try:
-                await page.wait_for_selector("text=Einschränkungen", timeout=15000)
-                await page.click("text=Einschränkungen")
-                print("✅ Einschränkungen-Tab geöffnet.")
+                for label_text in ["Baustellen", "Streckenruhen"]:
+                    checkbox = await page.query_selector(f"label:has-text('{label_text}') input[type='checkbox']")
+                    if checkbox and await checkbox.is_checked():
+                        await checkbox.click()
+                        print(f"✅ '{label_text}' deaktiviert.")
             except Exception as e:
-                print("❌ Fehler beim Klicken auf 'Einschränkungen':", e)
+                print("⚠️ Fehler beim Deaktivieren der Filter:", e)
+
+            # Einschränkungen öffnen
+            try:
+                await page.click("text=Einschränkungen", timeout=10000)
+                print("✅ Einschränkungen geöffnet.")
+            except Exception as e:
+                print("❌ Fehler beim Klick auf Einschränkungen:", e)
                 await send_screenshot(page, "Fehler beim Tab-Klick")
                 return []
 
-            # Checkbox "Nur Kartenausschnitt" deaktivieren
-            try:
-                checkbox = await page.query_selector("input[type='checkbox']")
-                if checkbox:
-                    is_checked = await checkbox.is_checked()
-                    if is_checked:
-                        await checkbox.click()
-                        print("✅ 'Nur Kartenausschnitt' deaktiviert.")
-            except Exception as e:
-                print("⚠️ Checkbox-Problem:", e)
-
-            # Tabelle laden
+            # Tabelle warten
             try:
                 await page.wait_for_selector("table tbody tr", timeout=20000)
-                print("✅ Tabelle erfolgreich geladen.")
+                print("✅ Tabelle geladen.")
             except Exception as e:
                 print("❌ Tabelle nicht gefunden:", e)
                 await send_screenshot(page, "Tabelle nicht gefunden")
                 return []
 
             rows = await page.query_selector_all("table tbody tr")
-            print(f"🔍 Anzahl Tabellenzeilen: {len(rows)}")
+            print(f"🔍 Gefundene Zeilen: {len(rows)}")
 
             stoerungen = []
 
@@ -155,35 +140,28 @@ async def scrape_stoerungen():
                     "nachricht": nachricht
                 })
 
-            print(f"[{datetime.now()}] ✅ {len(stoerungen)} Störungen erkannt.")
-            await browser.close()
+            print(f"[{datetime.now()}] ✅ {len(stoerungen)} neue Störungen erkannt.")
             return stoerungen
 
     except Exception as e:
-        print(f"[{datetime.now()}] ❌ Schwerer Fehler beim Scrapen: {e}")
+        print(f"[{datetime.now()}] ❌ Schwerer Fehler beim Scraping: {e}")
         return []
 
-# 🤖 Bot ready
+# 🤖 Wenn Bot ready
 @bot.event
 async def on_ready():
-    print(f"🤖 Bot ist online als {bot.user}")
+    print(f"🤖 Bot läuft als {bot.user}")
     channel = bot.get_channel(CHANNEL_ID)
     if channel:
         await channel.send("✅ Bahn-Störungs-Bot wurde gestartet!")
-    else:
-        print("❌ Channel nicht gefunden!")
     bot.loop.create_task(check_stoerungen())
 
-# 🔁 Prüfungsschleife
+# 🔁 Schleife zum Prüfen
 async def check_stoerungen():
     global last_check_time
+    global last_stoerungen
     await bot.wait_until_ready()
     channel = bot.get_channel(CHANNEL_ID)
-    if channel is None:
-        print("❌ Channel nicht gefunden!")
-        return
-
-    global last_stoerungen
 
     while not bot.is_closed():
         stoerungen = await scrape_stoerungen()
@@ -200,24 +178,23 @@ async def check_stoerungen():
 
         await asyncio.sleep(600)
 
-# 🛠️ !status Admin-Befehl
+# 🛠️ Adminbefehl !status
 @bot.command()
 async def status(ctx):
     if ADMIN_ID and str(ctx.author.id) != str(ADMIN_ID):
-        await ctx.send("❌ Du bist nicht berechtigt, diesen Befehl zu verwenden.")
+        await ctx.send("❌ Du bist nicht berechtigt.")
         return
 
     if last_check_time:
-        await ctx.send(f"✅ Bot läuft. Letzte Prüfung: {last_check_time.strftime('%d.%m.%Y %H:%M:%S')}")
+        await ctx.send(f"✅ Letzte Prüfung: {last_check_time.strftime('%d.%m.%Y %H:%M:%S')}")
     else:
-        await ctx.send("⏳ Bot wurde gestartet, aber noch keine Prüfung durchgeführt.")
+        await ctx.send("⏳ Noch keine Prüfung erfolgt.")
 
-# ▶️ Main
+# ▶️ Main-Funktion
 async def main():
-    if DISCORD_TOKEN is None or CHANNEL_ID == 0:
-        print("❌ DISCORD_TOKEN oder CHANNEL_ID fehlen!")
+    if not DISCORD_TOKEN or CHANNEL_ID == 0:
+        print("❌ Umgebungsvariablen fehlen!")
         return
-
     await asyncio.gather(
         start_web_server(),
         bot.start(DISCORD_TOKEN)
