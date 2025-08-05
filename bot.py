@@ -10,7 +10,7 @@ from io import BytesIO
 # 🔐 Discord
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
-ADMIN_ID = os.getenv("ADMIN_ID")  # optional: deine User-ID für !status
+ADMIN_ID = os.getenv("ADMIN_ID")  # optional
 
 # 🌐 Render/UptimeRobot Healthcheck
 async def handle_health(request):
@@ -35,12 +35,12 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 last_stoerungen = set()
 last_check_time = None
 
-# 📸 Screenshot-Funktion bei Fehlern
+# 📸 Screenshot-Funktion
 async def send_screenshot(page, fehlertext="Fehler"):
     try:
         channel = bot.get_channel(CHANNEL_ID)
         if channel is None:
-            print("⚠️ Kann Screenshot nicht senden – Channel nicht gefunden.")
+            print("⚠️ Screenshot nicht gesendet – Channel nicht gefunden.")
             return
 
         screenshot_bytes = await page.screenshot(type="png")
@@ -52,11 +52,10 @@ async def send_screenshot(page, fehlertext="Fehler"):
             content=f"❌ **Fehler beim Scraping:** {fehlertext}",
             file=discord.File(fp=buffer, filename="screenshot.png")
         )
-
     except Exception as e:
-        print("⚠️ Fehler beim Senden des Screenshots:", e)
+        print("⚠️ Fehler beim Screenshot-Senden:", e)
 
-# 🔍 Störungen scrapen
+# 🔍 Scraper
 async def scrape_stoerungen():
     try:
         async with async_playwright() as p:
@@ -66,7 +65,16 @@ async def scrape_stoerungen():
             print("🌐 Öffne strecken-info.de ...")
             await page.goto("https://strecken-info.de/", timeout=60000)
 
-            # Auf "Einschränkungen" klicken
+            # Pop-up "Züge rollen" schließen
+            try:
+                close_button = await page.query_selector("button:has-text('OK')")
+                if close_button:
+                    await close_button.click()
+                    print("✅ 'Züge rollen'-Pop-up geschlossen.")
+            except Exception as e:
+                print("⚠️ Kein Pop-up oder Fehler beim Schließen:", e)
+
+            # Einschränkungen-Tab klicken
             try:
                 await page.click("text=Einschränkungen", timeout=10000)
                 print("✅ Einschränkungen-Tab geöffnet.")
@@ -75,7 +83,7 @@ async def scrape_stoerungen():
                 await send_screenshot(page, "Fehler beim Tab-Klick")
                 return []
 
-            # Checkbox "Nur Kartenausschnitt" deaktivieren, falls nötig
+            # Checkbox "Nur Kartenausschnitt" deaktivieren
             try:
                 checkbox = await page.query_selector("input[type='checkbox']")
                 if checkbox:
@@ -84,7 +92,7 @@ async def scrape_stoerungen():
                         await checkbox.click()
                         print("✅ 'Nur Kartenausschnitt' deaktiviert.")
             except Exception as e:
-                print("⚠️ Checkbox konnte nicht überprüft werden:", e)
+                print("⚠️ Checkbox-Problem:", e)
 
             # Tabelle laden
             try:
@@ -139,7 +147,7 @@ async def scrape_stoerungen():
         print(f"[{datetime.now()}] ❌ Schwerer Fehler beim Scrapen: {e}")
         return []
 
-# 🤖 Bot ist bereit
+# 🤖 Bot ready
 @bot.event
 async def on_ready():
     print(f"🤖 Bot ist online als {bot.user}")
@@ -147,7 +155,7 @@ async def on_ready():
     if channel:
         await channel.send("✅ Bahn-Störungs-Bot wurde gestartet!")
     else:
-        print("❌ Discord-Channel nicht gefunden!")
+        print("❌ Channel nicht gefunden!")
     bot.loop.create_task(check_stoerungen())
 
 # 🔁 Prüfungsschleife
@@ -174,9 +182,9 @@ async def check_stoerungen():
                 except Exception as e:
                     print(f"❌ Fehler beim Senden: {e}")
 
-        await asyncio.sleep(600)  # 10 Minuten Pause
+        await asyncio.sleep(600)
 
-# 🛠️ Admin-Befehl "!status"
+# 🛠️ !status Admin-Befehl
 @bot.command()
 async def status(ctx):
     if ADMIN_ID and str(ctx.author.id) != str(ADMIN_ID):
@@ -188,7 +196,7 @@ async def status(ctx):
     else:
         await ctx.send("⏳ Bot wurde gestartet, aber noch keine Prüfung durchgeführt.")
 
-# ▶️ Hauptfunktion
+# ▶️ Main
 async def main():
     if DISCORD_TOKEN is None or CHANNEL_ID == 0:
         print("❌ DISCORD_TOKEN oder CHANNEL_ID fehlen!")
