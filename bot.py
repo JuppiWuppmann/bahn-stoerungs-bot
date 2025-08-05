@@ -63,8 +63,8 @@ async def scrape_stoerungen():
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(viewport={"width": 1280, "height": 1024})
             page = await context.new_page()
-            print("🌐 Öffne streckeninfo.de ...")
-            await page.goto("https://streckeninfo.de/", timeout=60000)
+            print("🌐 Öffne strecken-info.de ...")
+            await page.goto("https://strecken-info.de/", timeout=60000)
 
             # Auf "Einschränkungen" klicken
             try:
