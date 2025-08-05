@@ -1,17 +1,16 @@
 import os
 import asyncio
 from datetime import datetime
-from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 import discord
 from discord.ext import commands
 from aiohttp import web
 
-# 🔐 Discord-Variablen
+# 🔐 Discord
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
-# 🌐 Healthcheck für Render & UptimeRobot
+# 🌐 Render/UptimeRobot Healthcheck
 async def handle_health(request):
     return web.Response(text="OK")
 
@@ -26,62 +25,70 @@ async def start_web_server():
     await site.start()
     print(f"🌐 Webserver läuft auf Port {port}")
 
-# 📣 Discord-Bot starten
+# 📣 Discord Bot Setup
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 last_stoerungen = set()
 
-# 🔍 Scraper – verbessert
+# 🔍 Scraper (Tabelle auslesen und formatieren)
 async def scrape_stoerungen():
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
-            print("🌐 Lade strecken-info.de...")
-            await page.goto("https://strecken-info.de/", timeout=60000)
-            await page.wait_for_selector("div[class*='freiefahrt']", timeout=30000)
-            html = await page.content()
-            await browser.close()
+            print("🌐 Öffne streckeninfo.de ...")
+            await page.goto("https://streckeninfo.de/", timeout=60000)
 
-            soup = BeautifulSoup(html, "html.parser")
+            # Auf "Einschränkungen" klicken
+            await page.click("text=Einschränkungen")
+            await page.wait_for_selector("table", timeout=30000)
+
+            # Tabelle auslesen
+            rows = await page.query_selector_all("table tbody tr")
             stoerungen = []
 
-            for div in soup.select("div[class*='freiefahrt']"):
-                text = div.get_text(strip=True, separator=" ")
-
-                # Debug-Ausgabe (optional, kann gelöscht werden)
-                # print(f"🧪 Gefundener Text: {text}")
-
-                # Diese Inhalte ignorieren – keine echten Störungen!
-                if (
-                    not text 
-                    or len(text) < 30 
-                    or "Keine Daten gefunden" in text 
-                    or "OpenStreetMap" in text 
-                    or "Filter" in text
-                ):
+            for row in rows:
+                columns = await row.query_selector_all("td")
+                if len(columns) < 8:
                     continue
 
-                titel = text.split(".")[0][:100]
-                beschreibung = text
-                unique_id = titel + beschreibung
+                id_text = await columns[0].inner_text()
+                typ = await columns[1].inner_text()
+                ort = await columns[2].inner_text()
+                region = await columns[3].inner_text()
+                wirkung = await columns[4].inner_text()
+                ursache = await columns[5].inner_text()
+                gueltig_von = await columns[6].inner_text()
+                gueltig_bis = await columns[7].inner_text()
+
+                unique_id = id_text.strip()
+
+                nachricht = (
+                    "🚨 **Neue Bahn-Störung entdeckt!**\n\n"
+                    f"🆔 **ID:** {id_text.strip()}\n"
+                    f"📌 **Typ:** {typ.strip()}\n"
+                    f"📍 **Ort:** {ort.strip()}\n"
+                    f"🗺️ **Region:** {region.strip()}\n"
+                    f"🚦 **Wirkung:** {wirkung.strip()}\n"
+                    f"📋 **Ursache:** {ursache.strip()}\n"
+                    f"⏰ **Gültigkeit:** {gueltig_von.strip()} → {gueltig_bis.strip()}"
+                )
 
                 stoerungen.append({
-                    "titel": titel,
-                    "beschreibung": beschreibung,
-                    "unique_id": unique_id
+                    "unique_id": unique_id,
+                    "nachricht": nachricht
                 })
 
-            print(f"[{datetime.now()}] 🔍 {len(stoerungen)} echte Störungen gefunden.")
+            print(f"[{datetime.now()}] 🔍 {len(stoerungen)} Störungen gefunden.")
             return stoerungen
 
     except Exception as e:
         print(f"[{datetime.now()}] ❌ Fehler beim Scrapen: {e}")
         return []
 
-# 📥 Bot ready
+# 🤖 Bot ready
 @bot.event
 async def on_ready():
     print(f"🤖 Bot ist online als {bot.user}")
@@ -97,39 +104,30 @@ async def check_stoerungen():
     await bot.wait_until_ready()
     channel = bot.get_channel(CHANNEL_ID)
     if channel is None:
-        print(f"❌ Channel mit ID {CHANNEL_ID} nicht gefunden!")
+        print("❌ Discord-Channel nicht gefunden!")
         return
 
     global last_stoerungen
 
     while not bot.is_closed():
         stoerungen = await scrape_stoerungen()
-        if not stoerungen:
-            print(f"[{datetime.now()}] ⚠️ Keine neuen Störungen gefunden.")
-        else:
-            for s in stoerungen:
-                if s["unique_id"] not in last_stoerungen:
-                    last_stoerungen.add(s["unique_id"])
 
-                    beschreibung_formatiert = s['beschreibung'].replace(". ", ".\n")
-                    nachricht = (
-                        "🚨 **Neue Bahn-Störung entdeckt!**\n\n"
-                        f"**Titel:** {s['titel']}\n\n"
-                        f"**Details:**\n{beschreibung_formatiert}"
-                    )
+        for s in stoerungen:
+            if s["unique_id"] not in last_stoerungen:
+                last_stoerungen.add(s["unique_id"])
 
-                    try:
-                        await channel.send(nachricht)
-                        print(f"[{datetime.now()}] ✅ Neue Störung gesendet.")
-                    except Exception as e:
-                        print(f"❌ Fehler beim Senden an Discord: {e}")
+                try:
+                    await channel.send(s["nachricht"])
+                    print(f"[{datetime.now()}] ✅ Neue Störung gesendet: {s['unique_id']}")
+                except Exception as e:
+                    print(f"❌ Fehler beim Senden: {e}")
 
-        await asyncio.sleep(600)  # alle 10 Minuten prüfen
+        await asyncio.sleep(600)  # 10 Minuten warten
 
-# 🔁 Hauptfunktion
+# 🧠 Hauptfunktion
 async def main():
     if DISCORD_TOKEN is None or CHANNEL_ID == 0:
-        print("❌ DISCORD_TOKEN oder CHANNEL_ID sind nicht gesetzt!")
+        print("❌ DISCORD_TOKEN oder CHANNEL_ID fehlen!")
         return
 
     await asyncio.gather(
