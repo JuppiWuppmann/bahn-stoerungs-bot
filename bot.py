@@ -33,7 +33,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 last_stoerungen = set()
 
-# 🔍 Scraper
+# 🔍 Scraper – verbessert
 async def scrape_stoerungen():
     try:
         async with async_playwright() as p:
@@ -48,10 +48,20 @@ async def scrape_stoerungen():
             soup = BeautifulSoup(html, "html.parser")
             stoerungen = []
 
-            # Suche alle relevanten Störungs-Blöcke
             for div in soup.select("div[class*='freiefahrt']"):
                 text = div.get_text(strip=True, separator=" ")
-                if not text or len(text) < 20:
+
+                # Debug-Ausgabe (optional, kann gelöscht werden)
+                # print(f"🧪 Gefundener Text: {text}")
+
+                # Diese Inhalte ignorieren – keine echten Störungen!
+                if (
+                    not text 
+                    or len(text) < 30 
+                    or "Keine Daten gefunden" in text 
+                    or "OpenStreetMap" in text 
+                    or "Filter" in text
+                ):
                     continue
 
                 titel = text.split(".")[0][:100]
@@ -64,7 +74,7 @@ async def scrape_stoerungen():
                     "unique_id": unique_id
                 })
 
-            print(f"[{datetime.now()}] 🔍 {len(stoerungen)} Störungen gefunden.")
+            print(f"[{datetime.now()}] 🔍 {len(stoerungen)} echte Störungen gefunden.")
             return stoerungen
 
     except Exception as e:
@@ -100,18 +110,20 @@ async def check_stoerungen():
             for s in stoerungen:
                 if s["unique_id"] not in last_stoerungen:
                     last_stoerungen.add(s["unique_id"])
-                    # Nachricht schön formatieren
+
                     beschreibung_formatiert = s['beschreibung'].replace(". ", ".\n")
                     nachricht = (
                         "🚨 **Neue Bahn-Störung entdeckt!**\n\n"
                         f"**Titel:** {s['titel']}\n\n"
                         f"**Details:**\n{beschreibung_formatiert}"
                     )
+
                     try:
                         await channel.send(nachricht)
                         print(f"[{datetime.now()}] ✅ Neue Störung gesendet.")
                     except Exception as e:
                         print(f"❌ Fehler beim Senden an Discord: {e}")
+
         await asyncio.sleep(600)  # alle 10 Minuten prüfen
 
 # 🔁 Hauptfunktion
