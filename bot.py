@@ -11,6 +11,7 @@ from io import BytesIO
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 ADMIN_ID = os.getenv("ADMIN_ID")
+DEBUG = os.getenv("DEBUG", "true").lower() == "true"  # 🐞 DEBUG-Modus aktivieren
 
 # 🌐 Healthcheck-Handler
 async def handle_health(request):
@@ -38,16 +39,15 @@ last_check_time = None
 # 📸 Screenshot senden bei Fehler
 async def send_screenshot(page, fehlertext="Fehler"):
     try:
-        channel = bot.get_channel(CHANNEL_ID)
-        if channel:
-            screenshot_bytes = await page.screenshot(type="png")
-            buffer = BytesIO(screenshot_bytes)
-            buffer.name = "screenshot.png"
-            buffer.seek(0)
-            await channel.send(
-                content=f"❌ **Fehler beim Scraping:** {fehlertext}",
-                file=discord.File(fp=buffer, filename="screenshot.png")
-            )
+        channel = await bot.fetch_channel(CHANNEL_ID)
+        screenshot_bytes = await page.screenshot(type="png")
+        buffer = BytesIO(screenshot_bytes)
+        buffer.name = "screenshot.png"
+        buffer.seek(0)
+        await channel.send(
+            content=f"❌ **Fehler beim Scraping:** {fehlertext}",
+            file=discord.File(fp=buffer, filename="screenshot.png")
+        )
     except Exception as e:
         print("⚠️ Fehler beim Screenshot-Senden:", e)
 
@@ -59,10 +59,10 @@ async def scrape_stoerungen():
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(viewport={"width": 1280, "height": 1024})
             page = await context.new_page()
-            print("🌐 Lade Website...")
             await page.goto("https://strecken-info.de/", timeout=60000)
+            print("🌐 Website geladen.")
 
-            # 🔧 Info-Fenster schließen, falls vorhanden
+            # Infofenster schließen
             try:
                 await page.wait_for_selector("button:has-text('X')", timeout=7000)
                 close_btn = await page.query_selector("button:has-text('X')")
@@ -70,16 +70,16 @@ async def scrape_stoerungen():
                     await close_btn.click()
                     print("✅ Info-Fenster geschlossen.")
             except:
-                print("⚠️ Kein Info-Fenster oder bereits geschlossen")
+                print("⚠️ Kein Info-Fenster oder bereits geschlossen.")
 
-            # Filter-Menü öffnen
+            # Filter öffnen
             try:
                 await page.wait_for_selector("button:has-text('Filter')", timeout=10000)
                 await page.click("button:has-text('Filter')")
                 await asyncio.sleep(1)
                 print("✅ Filter-Menü geöffnet.")
             except Exception as e:
-                print("⚠️ Fehler beim Öffnen des Filter-Menüs:", e)
+                print("❌ Fehler beim Öffnen des Filter-Menüs:", e)
                 await send_screenshot(page, "Fehler beim Öffnen des Filters")
                 return []
 
@@ -89,40 +89,27 @@ async def scrape_stoerungen():
                     label = await page.query_selector(f"label:has-text('{label_text}')")
                     if label:
                         checkbox = await label.query_selector("input[type='checkbox']")
-                        if checkbox:
-                            if await checkbox.is_checked():
-                                await checkbox.click()
-                                print(f"✅ '{label_text}' deaktiviert.")
-                            else:
-                                print(f"☑️ '{label_text}' war bereits deaktiviert.")
+                        if checkbox and await checkbox.is_checked():
+                            await checkbox.click()
+                            print(f"✅ '{label_text}' deaktiviert.")
+                        else:
+                            print(f"☑️ '{label_text}' war bereits deaktiviert.")
                 except Exception as e:
                     print(f"⚠️ Fehler beim Deaktivieren von {label_text}:", e)
 
-            # Debug: Filterstatus loggen
-            try:
-                labels = await page.query_selector_all("label")
-                for label in labels:
-                    label_text = await label.inner_text()
-                    cb = await label.query_selector("input[type='checkbox']")
-                    if cb:
-                        checked = await cb.is_checked()
-                        print(f"🔍 Filter '{label_text.strip()}': {'✅ aktiv' if checked else '❌ deaktiviert'}")
-            except:
-                print("⚠️ Fehler beim Auslesen des Filterstatus")
-
-            # Einschränkungen-Tab öffnen
+            # Einschränkungen öffnen
             try:
                 await page.click("text=Einschränkungen", timeout=10000)
                 print("✅ Einschränkungen geöffnet.")
             except Exception as e:
-                print("❌ Fehler beim Klick auf Einschränkungen:", e)
-                await send_screenshot(page, "Fehler beim Tab-Klick")
+                print("❌ Fehler beim Öffnen des Tabs:", e)
+                await send_screenshot(page, "Fehler beim Öffnen des Tabs")
                 return []
 
             # Tabelle laden
             try:
                 await page.wait_for_selector("table tbody tr", timeout=20000)
-                print("✅ Tabelle geladen.")
+                print("✅ Tabelle gefunden.")
             except Exception as e:
                 print("❌ Tabelle nicht gefunden:", e)
                 await send_screenshot(page, "Tabelle nicht gefunden")
@@ -147,10 +134,7 @@ async def scrape_stoerungen():
                 gueltig_bis = await columns[7].inner_text()
 
                 typ_klein = typ.strip().lower()
-                print(f"📄 Typ erkannt: '{typ.strip()}' → '{typ_klein}'")
-
                 if typ_klein in ["baustelle", "streckenruhe"]:
-                    print(f"⏭️ Ignoriere Eintrag mit Typ: {typ_klein}")
                     continue
 
                 nachricht = (
@@ -164,6 +148,7 @@ async def scrape_stoerungen():
                     f"⏰ **Gültigkeit:** {gueltig_von.strip()} → {gueltig_bis.strip()}"
                 )
 
+                print(f"📋 Erkannt: ID {id_text.strip()} | Typ: {typ.strip()}")
                 stoerungen.append({
                     "unique_id": id_text.strip(),
                     "nachricht": nachricht
@@ -173,49 +158,47 @@ async def scrape_stoerungen():
             return stoerungen
 
     except Exception as e:
-        print(f"[{datetime.now()}] ❌ Fehler in scrape_stoerungen(): {e}")
+        print(f"❌ Fehler in scrape_stoerungen(): {e}")
         return []
 
-# 🤖 Wenn Bot ready
+# 🤖 Bot Ready
 @bot.event
 async def on_ready():
     print(f"🤖 Bot läuft als {bot.user}")
-    channel = bot.get_channel(CHANNEL_ID)
+    channel = await bot.fetch_channel(CHANNEL_ID)
+    print(f"📡 Channel geladen: {channel}")
     if channel:
         await channel.send("✅ Bahn-Störungs-Bot wurde gestartet!")
-    bot.loop.create_task(check_stoerungen())
+    bot.loop.create_task(check_stoerungen(channel))
 
 # 🔁 Prüfungsschleife
-async def check_stoerungen():
+async def check_stoerungen(channel):
     global last_stoerungen, last_check_time
     await bot.wait_until_ready()
-    print("🚀 check_stoerungen() gestartet")
-    channel = bot.get_channel(CHANNEL_ID)
+    print("🚀 Prüfung gestartet")
 
     while not bot.is_closed():
         stoerungen = await scrape_stoerungen()
         last_check_time = datetime.now()
 
+        if not stoerungen:
+            print("ℹ️ Keine neuen Störungen gefunden.")
+            await asyncio.sleep(600)
+            continue
+
         for s in stoerungen:
-            if s["unique_id"] not in last_stoerungen:
+            # 🐞 DEBUG: Sende alles oder nur neue?
+            if DEBUG or s["unique_id"] not in last_stoerungen:
                 last_stoerungen.add(s["unique_id"])
                 try:
                     await channel.send(s["nachricht"])
-                    print(f"[{datetime.now()}] ✅ Neue Störung gesendet: {s['unique_id']}")
+                    print(f"✅ Störung gesendet: {s['unique_id']}")
                 except Exception as e:
                     print(f"❌ Fehler beim Senden: {e}")
-        await asyncio.sleep(600)
+            else:
+                print(f"⏩ Bereits gesendet: {s['unique_id']}")
 
-# 🛠️ Admin-Befehl
-@bot.command()
-async def status(ctx):
-    if ADMIN_ID and str(ctx.author.id) != str(ADMIN_ID):
-        await ctx.send("❌ Du bist nicht berechtigt.")
-        return
-    if last_check_time:
-        await ctx.send(f"✅ Letzte Prüfung: {last_check_time.strftime('%d.%m.%Y %H:%M:%S')}")
-    else:
-        await ctx.send("⏳ Noch keine Prüfung erfolgt.")
+        await asyncio.sleep(600)
 
 # ▶️ Main
 async def main():
@@ -231,4 +214,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("🛑 Bot manuell beendet.")
+        print("🛑 Bot beendet.")
