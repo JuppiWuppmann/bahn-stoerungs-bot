@@ -62,19 +62,20 @@ async def scrape_stoerungen():
             print("🌐 Lade Website...")
             await page.goto("https://strecken-info.de/", timeout=60000)
 
-            # Pop-up schließen
+            # 🔧 Info-Fenster schließen, falls vorhanden
             try:
-                await page.wait_for_selector("button[aria-label='Schließen']", timeout=5000)
-                close_btn = await page.query_selector("button[aria-label='Schließen']")
+                await page.wait_for_selector("button:has-text('X')", timeout=7000)
+                close_btn = await page.query_selector("button:has-text('X')")
                 if close_btn:
                     await close_btn.click()
-                    print("✅ Pop-up geschlossen.")
+                    print("✅ Info-Fenster geschlossen.")
             except:
-                print("⚠️ Kein Pop-up oder Timeout beim Schließen")
+                print("⚠️ Kein Info-Fenster oder bereits geschlossen")
 
             # Filter-Menü öffnen
             try:
-                await page.click("text=Filter", timeout=10000)
+                await page.wait_for_selector("button:has-text('Filter')", timeout=10000)
+                await page.click("button:has-text('Filter')")
                 await asyncio.sleep(1)
                 print("✅ Filter-Menü geöffnet.")
             except Exception as e:
