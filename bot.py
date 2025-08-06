@@ -60,17 +60,24 @@ async def scrape_stoerungen():
             context = await browser.new_context(viewport={"width": 1280, "height": 1024})
             page = await context.new_page()
             print("🌐 Lade Website...")
+
             await page.goto("https://strecken-info.de/", timeout=60000)
             print("🌐 Website geladen.")
 
-            # 🧹 Blockierendes Overlay entfernen
+            # Warte auf Indikator, dass Seite geladen ist
+            try:
+                await page.wait_for_selector("text=Einschränkungen", timeout=20000)
+                print("✅ Einschränkungen sichtbar.")
+            except:
+                print("⚠️ Einschränkungen nicht sichtbar – Seite lädt evtl. nicht korrekt.")
+                await send_screenshot(page, "Einschränkungen-Tab nicht sichtbar")
+                return []
+
+            # 🧹 Blockierendes Overlay vollständig entfernen
             await page.evaluate("""
-                const blocker = document.querySelector("div[class^='freiefahrt']");
-                if (blocker) {
-                    blocker.remove();
-                }
+                document.querySelectorAll("div[class*='freiefahrt']").forEach(el => el.remove());
             """)
-            print("🧹 Blockierendes Overlay entfernt.")
+            print("🧹 Mögliche Overlays entfernt.")
 
             # 🔧 Info-Fenster schließen, falls vorhanden
             try:
@@ -84,8 +91,8 @@ async def scrape_stoerungen():
 
             # Filter-Menü öffnen
             try:
-                await page.wait_for_selector("button:has-text('Filter')", timeout=10000)
-                await page.click("button:has-text('Filter')")
+                await page.wait_for_selector("text=Filter", timeout=10000)
+                await page.click("text=Filter")
                 await asyncio.sleep(1)
                 print("✅ Filter-Menü geöffnet.")
             except Exception as e:
@@ -99,26 +106,13 @@ async def scrape_stoerungen():
                     label = await page.query_selector(f"label:has-text('{label_text}')")
                     if label:
                         checkbox = await label.query_selector("input[type='checkbox']")
-                        if checkbox:
-                            if await checkbox.is_checked():
-                                await checkbox.click()
-                                print(f"✅ '{label_text}' deaktiviert.")
-                            else:
-                                print(f"☑️ '{label_text}' war bereits deaktiviert.")
+                        if checkbox and await checkbox.is_checked():
+                            await checkbox.click()
+                            print(f"✅ '{label_text}' deaktiviert.")
+                        else:
+                            print(f"☑️ '{label_text}' war bereits deaktiviert.")
                 except Exception as e:
                     print(f"⚠️ Fehler beim Deaktivieren von {label_text}:", e)
-
-            # Debug: Filterstatus loggen
-            try:
-                labels = await page.query_selector_all("label")
-                for label in labels:
-                    label_text = await label.inner_text()
-                    cb = await label.query_selector("input[type='checkbox']")
-                    if cb:
-                        checked = await cb.is_checked()
-                        print(f"🔍 Filter '{label_text.strip()}': {'✅ aktiv' if checked else '❌ deaktiviert'}")
-            except:
-                print("⚠️ Fehler beim Auslesen des Filterstatus")
 
             # Einschränkungen-Tab öffnen
             try:
