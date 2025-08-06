@@ -89,16 +89,23 @@ async def scrape_stoerungen():
             except:
                 print("⚠️ Kein Info-Fenster oder bereits geschlossen")
 
-            # Filter-Menü öffnen
+           # Filter-Menü öffnen (robuster)
             try:
-                await page.wait_for_selector("text=Filter", timeout=10000)
-                await page.click("text=Filter")
-                await asyncio.sleep(1)
-                print("✅ Filter-Menü geöffnet.")
+                filter_button = await page.query_selector("text=Filter")
+                if filter_button:
+                    await filter_button.scroll_into_view_if_needed()
+                    await filter_button.click()
+                    await asyncio.sleep(1)
+                    print("✅ Filter-Menü geöffnet.")
+                else:
+                    print("❌ 'Filter'-Button nicht gefunden.")
+                    await send_screenshot(page, "Filter-Button nicht gefunden")
+                    return []
             except Exception as e:
                 print("⚠️ Fehler beim Öffnen des Filter-Menüs:", e)
                 await send_screenshot(page, "Fehler beim Öffnen des Filters")
                 return []
+
 
             # Filter deaktivieren
             for label_text in ["Baustellen", "Streckenruhen"]:
