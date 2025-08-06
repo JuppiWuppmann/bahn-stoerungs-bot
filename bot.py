@@ -65,10 +65,13 @@ async def scrape_stoerungen():
 
             # Pop-up schließen (falls sichtbar)
             try:
+                await page.wait_for_selector("button[aria-label='Schließen']", timeout=5000)
                 close_btn = await page.query_selector("button[aria-label='Schließen']")
                 if close_btn:
                     await close_btn.click()
                     print("✅ Pop-up geschlossen.")
+                else:
+                    print("ℹ️ Kein Pop-up vorhanden.")
             except Exception as e:
                 print("⚠️ Kein Pop-up oder Fehler beim Schließen:", e)
 
@@ -78,12 +81,20 @@ async def scrape_stoerungen():
                 await asyncio.sleep(1)
 
                 for label_text in ["Baustellen", "Streckenruhen"]:
-                    checkbox = await page.query_selector(f"label:has-text('{label_text}') input[type='checkbox']")
-                    if checkbox and await checkbox.is_checked():
-                        await checkbox.click()
-                        print(f"✅ '{label_text}' deaktiviert.")
+                    try:
+                        label = await page.wait_for_selector(f"label:has-text('{label_text}')", timeout=5000)
+                        checkbox = await label.query_selector("input[type='checkbox']")
+                        if checkbox:
+                            checked = await checkbox.is_checked()
+                            if checked:
+                                await label.click()
+                                print(f"✅ '{label_text}' deaktiviert.")
+                            else:
+                                print(f"ℹ️ '{label_text}' war bereits deaktiviert.")
+                    except Exception as e:
+                        print(f"⚠️ Fehler beim Deaktivieren von '{label_text}':", e)
             except Exception as e:
-                print("⚠️ Fehler beim Deaktivieren der Filter:", e)
+                print("⚠️ Fehler beim Öffnen des Filter-Menüs:", e)
 
             # Einschränkungen öffnen
             try:
@@ -122,6 +133,11 @@ async def scrape_stoerungen():
                 gueltig_von = await columns[6].inner_text()
                 gueltig_bis = await columns[7].inner_text()
 
+                # ❗ Filter gegen unerwünschte Typen im Nachgang
+                if typ.strip().lower() in ["baustelle", "streckenruhe"]:
+                    print(f"⏭️ Ignoriere '{typ.strip()}' mit ID {id_text.strip()}")
+                    continue
+
                 unique_id = id_text.strip()
 
                 nachricht = (
@@ -140,7 +156,7 @@ async def scrape_stoerungen():
                     "nachricht": nachricht
                 })
 
-            print(f"[{datetime.now()}] ✅ {len(stoerungen)} neue Störungen erkannt.")
+            print(f"[{datetime.now()}] ✅ {len(stoerungen)} relevante Störungen erkannt.")
             return stoerungen
 
     except Exception as e:
