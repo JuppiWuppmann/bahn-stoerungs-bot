@@ -73,7 +73,6 @@ async def scrape_stoerungen():
                 filter_button = await page.wait_for_selector("button:has-text('Filter')", timeout=10000)
                 await filter_button.click(force=True)
                 print("✅ Filter-Menü geöffnet.")
-                await page.wait_for_selector("label:has-text('Baustellen')", timeout=5000)
                 await asyncio.sleep(1)
 
                 for label_text in ["Baustellen", "Streckenruhen"]:
@@ -83,15 +82,20 @@ async def scrape_stoerungen():
                         if checkbox:
                             checked = await checkbox.is_checked()
                             if checked:
-                                await label.click(force=True)
-                                print(f"✅ '{label_text}' deaktiviert.")
+                                await checkbox.click(force=True)
+                                await asyncio.sleep(0.5)
+                                checked_after = await checkbox.is_checked()
+                                if not checked_after:
+                                    print(f"✅ '{label_text}' erfolgreich deaktiviert.")
+                                else:
+                                    print(f"❌ '{label_text}' konnte nicht deaktiviert werden.")
                             else:
                                 print(f"ℹ️ '{label_text}' war bereits deaktiviert.")
                     except Exception as e:
                         print(f"⚠️ Fehler beim Deaktivieren von '{label_text}':", e)
 
-                # Logging aller Checkboxen
-                filters = await page.query_selector_all("input[type='checkbox']")
+                # Filterstatus debuggen
+                filters = await page.query_selector_all("label input[type='checkbox']")
                 for f in filters:
                     label = await f.evaluate('(el) => el.closest("label")?.innerText || "?"')
                     checked = await f.is_checked()
@@ -221,3 +225,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
