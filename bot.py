@@ -7,12 +7,10 @@ from discord.ext import commands
 from aiohttp import web
 from io import BytesIO
 
-# 🔐 Discord Konfiguration
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
-ADMIN_ID = os.getenv("ADMIN_ID")  # optional
+ADMIN_ID = os.getenv("ADMIN_ID")
 
-# 🌐 Healthcheck
 async def handle_health(request):
     return web.Response(text="OK")
 
@@ -27,7 +25,6 @@ async def start_web_server():
     await site.start()
     print(f"🌐 Webserver läuft auf Port {port}")
 
-# 📣 Discord Bot Setup
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -35,7 +32,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 last_stoerungen = set()
 last_check_time = None
 
-# 📸 Screenshot senden bei Fehler
 async def send_screenshot(page, fehlertext="Fehler"):
     try:
         channel = bot.get_channel(CHANNEL_ID)
@@ -53,7 +49,6 @@ async def send_screenshot(page, fehlertext="Fehler"):
     except Exception as e:
         print("⚠️ Fehler beim Screenshot-Senden:", e)
 
-# 🔍 Scraping Funktion
 async def scrape_stoerungen():
     try:
         async with async_playwright() as p:
@@ -63,19 +58,17 @@ async def scrape_stoerungen():
             print("🌐 Lade Website...")
             await page.goto("https://strecken-info.de/", timeout=60000)
 
-            # Pop-up schließen (falls sichtbar)
+            # Pop-up schließen
             try:
                 await page.wait_for_selector("button[aria-label='Schließen']", timeout=5000)
                 close_btn = await page.query_selector("button[aria-label='Schließen']")
                 if close_btn:
                     await close_btn.click()
                     print("✅ Pop-up geschlossen.")
-                else:
-                    print("ℹ️ Kein Pop-up vorhanden.")
             except Exception as e:
                 print("⚠️ Kein Pop-up oder Fehler beim Schließen:", e)
 
-            # Filter: Baustellen und Streckenruhen deaktivieren
+            # Filter deaktivieren
             try:
                 await page.click("text=Filter", timeout=10000)
                 await asyncio.sleep(1)
@@ -93,6 +86,14 @@ async def scrape_stoerungen():
                                 print(f"ℹ️ '{label_text}' war bereits deaktiviert.")
                     except Exception as e:
                         print(f"⚠️ Fehler beim Deaktivieren von '{label_text}':", e)
+
+                # Logging aller Checkboxen
+                filters = await page.query_selector_all("input[type='checkbox']")
+                for f in filters:
+                    label = await f.evaluate('(el) => el.closest("label")?.innerText || "?"')
+                    checked = await f.is_checked()
+                    print(f"🔍 Filter '{label.strip()}': {'✅ aktiv' if checked else '❌ deaktiviert'}")
+
             except Exception as e:
                 print("⚠️ Fehler beim Öffnen des Filter-Menüs:", e)
 
@@ -133,9 +134,12 @@ async def scrape_stoerungen():
                 gueltig_von = await columns[6].inner_text()
                 gueltig_bis = await columns[7].inner_text()
 
-                # ❗ Filter gegen unerwünschte Typen im Nachgang
-                if typ.strip().lower() in ["baustelle", "streckenruhe"]:
-                    print(f"⏭️ Ignoriere '{typ.strip()}' mit ID {id_text.strip()}")
+                # Robust gefilterter Typ
+                typ_clean = typ.strip().lower()
+                print(f"📄 Typ erkannt: '{typ}' → '{typ_clean}'")
+
+                if any(x in typ_clean for x in ["baustelle", "streckenruhe"]):
+                    print(f"⏭️ Ignoriere Eintrag mit Typ: {typ_clean}")
                     continue
 
                 unique_id = id_text.strip()
@@ -163,7 +167,6 @@ async def scrape_stoerungen():
         print(f"[{datetime.now()}] ❌ Schwerer Fehler beim Scraping: {e}")
         return []
 
-# 🤖 Wenn Bot ready
 @bot.event
 async def on_ready():
     print(f"🤖 Bot läuft als {bot.user}")
@@ -172,7 +175,6 @@ async def on_ready():
         await channel.send("✅ Bahn-Störungs-Bot wurde gestartet!")
     bot.loop.create_task(check_stoerungen())
 
-# 🔁 Schleife zum Prüfen
 async def check_stoerungen():
     global last_check_time
     global last_stoerungen
@@ -194,7 +196,6 @@ async def check_stoerungen():
 
         await asyncio.sleep(600)
 
-# 🛠️ Adminbefehl !status
 @bot.command()
 async def status(ctx):
     if ADMIN_ID and str(ctx.author.id) != str(ADMIN_ID):
@@ -206,7 +207,6 @@ async def status(ctx):
     else:
         await ctx.send("⏳ Noch keine Prüfung erfolgt.")
 
-# ▶️ Main-Funktion
 async def main():
     if not DISCORD_TOKEN or CHANNEL_ID == 0:
         print("❌ Umgebungsvariablen fehlen!")
