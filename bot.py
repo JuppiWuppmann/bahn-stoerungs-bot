@@ -68,9 +68,12 @@ async def scrape_stoerungen():
             except Exception as e:
                 print("⚠️ Kein Pop-up oder Fehler beim Schließen:", e)
 
-            # Filter deaktivieren
+            # Filter öffnen und deaktivieren
             try:
-                await page.click("text=Filter", timeout=10000)
+                filter_button = await page.wait_for_selector("button:has-text('Filter')", timeout=10000)
+                await filter_button.click(force=True)
+                print("✅ Filter-Menü geöffnet.")
+                await page.wait_for_selector("label:has-text('Baustellen')", timeout=5000)
                 await asyncio.sleep(1)
 
                 for label_text in ["Baustellen", "Streckenruhen"]:
@@ -80,7 +83,7 @@ async def scrape_stoerungen():
                         if checkbox:
                             checked = await checkbox.is_checked()
                             if checked:
-                                await label.click()
+                                await label.click(force=True)
                                 print(f"✅ '{label_text}' deaktiviert.")
                             else:
                                 print(f"ℹ️ '{label_text}' war bereits deaktiviert.")
@@ -96,6 +99,7 @@ async def scrape_stoerungen():
 
             except Exception as e:
                 print("⚠️ Fehler beim Öffnen des Filter-Menüs:", e)
+                await send_screenshot(page, "Filter-Menü konnte nicht geöffnet werden.")
 
             # Einschränkungen öffnen
             try:
@@ -134,7 +138,6 @@ async def scrape_stoerungen():
                 gueltig_von = await columns[6].inner_text()
                 gueltig_bis = await columns[7].inner_text()
 
-                # Robust gefilterter Typ
                 typ_clean = typ.strip().lower()
                 print(f"📄 Typ erkannt: '{typ}' → '{typ_clean}'")
 
