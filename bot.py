@@ -57,14 +57,26 @@ async def scrape_stoerungen():
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(viewport={"width": 1280, "height": 1024})
+            context = await browser.new_context(
+                viewport={"width": 1280, "height": 1024},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+            )
             page = await context.new_page()
             print("🌐 Lade Website...")
 
             await page.goto("https://strecken-info.de/", timeout=60000)
+
+            try:
+                screenshot_bytes = await page.screenshot(type="png")
+                buffer = BytesIO(screenshot_bytes)
+                buffer.name = "nach_goto.png"
+                buffer.seek(0)
+                await send_screenshot(page, "Seite nach goto() geladen")
+            except Exception as e:
+                print("⚠️ Screenshot nach goto() fehlgeschlagen:", e)
+
             print("🌐 Website geladen.")
 
-            # Warte auf Indikator, dass Seite geladen ist
             try:
                 await page.wait_for_selector("text=Einschränkungen", timeout=20000)
                 print("✅ Einschränkungen sichtbar.")
@@ -73,13 +85,11 @@ async def scrape_stoerungen():
                 await send_screenshot(page, "Einschränkungen-Tab nicht sichtbar")
                 return []
 
-            # 🧹 Blockierendes Overlay vollständig entfernen
             await page.evaluate("""
                 document.querySelectorAll("div[class*='freiefahrt']").forEach(el => el.remove());
             """)
             print("🧹 Mögliche Overlays entfernt.")
 
-            # 🔧 Info-Fenster schließen, falls vorhanden
             try:
                 await page.wait_for_selector("button:has-text('X')", timeout=7000)
                 close_btn = await page.query_selector("button:has-text('X')")
@@ -89,7 +99,6 @@ async def scrape_stoerungen():
             except:
                 print("⚠️ Kein Info-Fenster oder bereits geschlossen")
 
-           # Filter-Menü öffnen (robuster)
             try:
                 filter_button = await page.query_selector("text=Filter")
                 if filter_button:
@@ -106,8 +115,6 @@ async def scrape_stoerungen():
                 await send_screenshot(page, "Fehler beim Öffnen des Filters")
                 return []
 
-
-            # Filter deaktivieren
             for label_text in ["Baustellen", "Streckenruhen"]:
                 try:
                     label = await page.query_selector(f"label:has-text('{label_text}')")
@@ -121,7 +128,6 @@ async def scrape_stoerungen():
                 except Exception as e:
                     print(f"⚠️ Fehler beim Deaktivieren von {label_text}:", e)
 
-            # Einschränkungen-Tab öffnen
             try:
                 await page.click("text=Einschränkungen", timeout=10000)
                 print("✅ Einschränkungen geöffnet.")
@@ -130,7 +136,6 @@ async def scrape_stoerungen():
                 await send_screenshot(page, "Fehler beim Tab-Klick")
                 return []
 
-            # Tabelle laden
             try:
                 await page.wait_for_selector("table tbody tr", timeout=20000)
                 print("✅ Tabelle gefunden.")
@@ -187,7 +192,6 @@ async def scrape_stoerungen():
         print(f"[{datetime.now()}] ❌ Fehler in scrape_stoerungen(): {e}")
         return []
 
-# 🤖 Wenn Bot ready
 @bot.event
 async def on_ready():
     print(f"🤖 Bot läuft als {bot.user}")
@@ -196,7 +200,6 @@ async def on_ready():
         await channel.send("✅ Bahn-Störungs-Bot wurde gestartet!")
     bot.loop.create_task(check_stoerungen())
 
-# 🔁 Prüfungsschleife
 async def check_stoerungen():
     global last_stoerungen, last_check_time
     await bot.wait_until_ready()
@@ -217,7 +220,6 @@ async def check_stoerungen():
                     print(f"❌ Fehler beim Senden: {e}")
         await asyncio.sleep(600)
 
-# 🛠️ Admin-Befehl
 @bot.command()
 async def status(ctx):
     if ADMIN_ID and str(ctx.author.id) != str(ADMIN_ID):
@@ -228,7 +230,6 @@ async def status(ctx):
     else:
         await ctx.send("⏳ Noch keine Prüfung erfolgt.")
 
-# ▶️ Main
 async def main():
     if not DISCORD_TOKEN or CHANNEL_ID == 0:
         print("❌ Umgebungsvariablen fehlen!")
