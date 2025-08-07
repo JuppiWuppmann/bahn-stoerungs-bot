@@ -59,8 +59,8 @@ async def scrape_stoerungen():
             page = await context.new_page()
             print("🌐 Lade Website...")
             await page.goto("https://strecken-info.de/", timeout=60000)
-            await page.wait_for_load_state("networkidle")
-            await asyncio.sleep(2)
+            await page.wait_for_selector("button:has-text('Filter')", timeout=30000)
+
 
             # Info-Fenster schließen
             try:
