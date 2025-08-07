@@ -112,21 +112,28 @@ async def scrape_stoerungen():
             except:
                 print("⚠️ Kein Info-Fenster oder bereits geschlossen")
 
+            # Prüfen, ob das Filter-Menü bereits offen ist
             try:
-                filter_button = await page.query_selector("text=Filter")
-                if filter_button:
-                    await filter_button.scroll_into_view_if_needed()
-                    await filter_button.click()
-                    await asyncio.sleep(1)
-                    print("✅ Filter-Menü geöffnet.")
+                baustellen_checkbox = await page.query_selector("label:has-text('Baustellen')")
+                if baustellen_checkbox:
+                    print("✅ Filter-Menü ist bereits geöffnet.")
                 else:
-                    print("❌ 'Filter'-Button nicht gefunden.")
-                    await send_screenshot(page, "Filter-Button nicht gefunden")
-                    return []
+                    print("🔎 Filter-Menü scheinbar nicht offen – versuche zu öffnen...")
+                    filter_button = await page.query_selector("text=Filter")
+                    if filter_button:
+                        await filter_button.scroll_into_view_if_needed()
+                        await filter_button.click()
+                        await asyncio.sleep(1)
+                        print("✅ Filter-Menü geöffnet.")
+                    else:
+                        print("❌ 'Filter'-Button nicht gefunden.")
+                        await send_screenshot(page, "Filter-Button nicht gefunden")
+                        return []
             except Exception as e:
-                print("⚠️ Fehler beim Öffnen des Filter-Menüs:", e)
+                print("⚠️ Fehler beim Öffnen oder Erkennen des Filter-Menüs:", e)
                 await send_screenshot(page, "Fehler beim Öffnen des Filters")
                 return []
+
 
             for label_text in ["Baustellen", "Streckenruhen"]:
                 try:
