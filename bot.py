@@ -7,12 +7,10 @@ from discord.ext import commands
 from aiohttp import web
 from io import BytesIO
 
-# 🔐 Umgebungsvariablen (aus .env bei Render)
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 ADMIN_ID = os.getenv("ADMIN_ID")
 
-# 🌐 Healthcheck-Handler
 async def handle_health(request):
     return web.Response(text="OK")
 
@@ -27,7 +25,6 @@ async def start_web_server():
     await site.start()
     print(f"🌐 Webserver läuft auf Port {port}")
 
-# 📣 Discord-Bot Setup
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -35,7 +32,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 last_stoerungen = set()
 last_check_time = None
 
-# 📸 Screenshot senden bei Fehler
 async def send_screenshot(page, fehlertext="Fehler"):
     try:
         channel = bot.get_channel(CHANNEL_ID)
@@ -67,7 +63,6 @@ async def scrape_stoerungen():
             await page.wait_for_load_state("networkidle")
             await asyncio.sleep(2)
 
-            # 🧹 Info-Overlay schließen
             try:
                 await asyncio.sleep(1)
                 overlay = await page.query_selector("div:has-text('Neue Features')")
@@ -84,7 +79,6 @@ async def scrape_stoerungen():
             except Exception as e:
                 print(f"⚠️ Fehler beim Schließen des Info-Fensters: {e}")
 
-            # Screenshot zur Kontrolle
             try:
                 screenshot_bytes = await page.screenshot(type="png")
                 buffer = BytesIO(screenshot_bytes)
@@ -96,15 +90,14 @@ async def scrape_stoerungen():
 
             print("🌐 Website geladen.")
 
-            # 🧹 Overlays entfernen
             await page.evaluate("""
                 document.querySelectorAll("div[class*='freiefahrt']").forEach(el => el.remove());
             """)
             print("🧹 Mögliche Overlays entfernt.")
 
-            # 📂 Filter-Menü sicher öffnen
             try:
                 filter_offen = await page.is_visible("label:has-text('Baustellen')")
+                
                 if not filter_offen:
                     print("🔍 Filter-Menü scheint nicht offen – versuche zu öffnen...")
                     filter_button = (
@@ -124,19 +117,12 @@ async def scrape_stoerungen():
                         return []
                 else:
                     print("✅ Filter-Menü ist bereits offen.")
+
             except Exception as e:
                 print("⚠️ Fehler beim Öffnen oder Erkennen des Filter-Menüs:", e)
                 await send_screenshot(page, "Fehler beim Öffnen des Filters")
                 return []
 
-                else:
-                    print("✅ Filter-Menü ist bereits offen.")
-            except Exception as e:
-                print("⚠️ Fehler beim Öffnen oder Erkennen des Filter-Menüs:", e)
-                await send_screenshot(page, "Fehler beim Öffnen des Filters")
-                return []
-
-            # 🚫 Baustellen / Streckenruhen abwählen
             for label_text in ["Baustellen", "Streckenruhen"]:
                 try:
                     label = await page.query_selector(f"label:has-text('{label_text}')")
@@ -150,7 +136,6 @@ async def scrape_stoerungen():
                 except Exception as e:
                     print(f"⚠️ Fehler beim Deaktivieren von {label_text}:", e)
 
-            # 📋 Einschränkungen anzeigen
             try:
                 await page.click("text=Einschränkungen", timeout=10000)
                 print("✅ Einschränkungen geöffnet.")
