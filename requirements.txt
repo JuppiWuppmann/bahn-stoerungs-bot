@@ -1,5 +1,3 @@
 discord.py
-playwright
-beautifulsoup4
 aiohttp
-debugpy
+playwright
