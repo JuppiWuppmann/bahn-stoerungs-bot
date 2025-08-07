@@ -112,28 +112,30 @@ async def scrape_stoerungen():
             except:
                 print("⚠️ Kein Info-Fenster oder bereits geschlossen")
 
-            # Prüfen, ob das Filter-Menü bereits offen ist
+            # 📂 Sicherstellen, dass das Filter-Menü offen ist
             try:
-                baustellen_checkbox = await page.query_selector("label:has-text('Baustellen')")
-                if baustellen_checkbox:
-                    print("✅ Filter-Menü ist bereits geöffnet.")
-                else:
-                    print("🔎 Filter-Menü scheinbar nicht offen – versuche zu öffnen...")
-                    filter_button = await page.query_selector("text=Filter")
+                # Versuch: Ist das Filter-Menü offen?
+                baustellen_label = await page.query_selector("label:has-text('Baustellen')")
+                if not baustellen_label:
+                    print("🔍 Filter-Menü scheint nicht offen – versuche zu öffnen...")
+                    # Klicke auf Filter-Button
+                    filter_button = await page.query_selector("button[aria-label='Filter']") or await page.query_selector("text=Filter")
                     if filter_button:
                         await filter_button.scroll_into_view_if_needed()
+                        await asyncio.sleep(1)
                         await filter_button.click()
                         await asyncio.sleep(1)
                         print("✅ Filter-Menü geöffnet.")
                     else:
-                        print("❌ 'Filter'-Button nicht gefunden.")
+                        print("❌ Kein 'Filter'-Button gefunden.")
                         await send_screenshot(page, "Filter-Button nicht gefunden")
                         return []
+                  else:
+                    print("✅ Filter-Menü ist bereits offen.")
             except Exception as e:
                 print("⚠️ Fehler beim Öffnen oder Erkennen des Filter-Menüs:", e)
                 await send_screenshot(page, "Fehler beim Öffnen des Filters")
                 return []
-
 
             for label_text in ["Baustellen", "Streckenruhen"]:
                 try:
