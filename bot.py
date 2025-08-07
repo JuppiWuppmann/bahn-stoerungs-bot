@@ -130,7 +130,7 @@ async def scrape_stoerungen():
                         print("❌ Kein 'Filter'-Button gefunden.")
                         await send_screenshot(page, "Filter-Button nicht gefunden")
                         return []
-                  else:
+               else:
                     print("✅ Filter-Menü ist bereits offen.")
             except Exception as e:
                 print("⚠️ Fehler beim Öffnen oder Erkennen des Filter-Menüs:", e)
