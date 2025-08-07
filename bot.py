@@ -7,12 +7,10 @@ from discord.ext import commands
 from aiohttp import web
 from io import BytesIO
 
-# 🔐 Umgebungsvariablen
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 ADMIN_ID = os.getenv("ADMIN_ID")
 
-# 🌐 Healthcheck-Handler
 async def handle_health(request):
     return web.Response(text="OK")
 
@@ -27,7 +25,6 @@ async def start_web_server():
     await site.start()
     print(f"🌐 Webserver läuft auf Port {port}")
 
-# 📣 Discord-Bot Setup
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -35,7 +32,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 last_stoerungen = set()
 last_check_time = None
 
-# 📸 Screenshot senden bei Fehler
 async def send_screenshot(page, fehlertext="Fehler"):
     try:
         channel = bot.get_channel(CHANNEL_ID)
@@ -62,56 +58,40 @@ async def scrape_stoerungen():
             )
             page = await context.new_page()
             print("🌐 Lade Website...")
-
             await page.goto("https://strecken-info.de/", timeout=60000)
             await page.wait_for_load_state("networkidle")
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)
 
-            # 🧹 Info-Overlay schließen
+            # Info-Fenster schließen
             try:
-                overlay = await page.query_selector("div:has-text('Neue Features')")
-                if overlay:
-                    close_btn = await overlay.query_selector("button:has-text('X')") or await overlay.query_selector("button")
-                    if close_btn:
-                        await close_btn.click()
-                        await asyncio.sleep(1)
-                        print("✅ Info-Overlay geschlossen.")
+                close_btn = await page.query_selector("div[class*=MuiDialog] button[aria-label='Close']")
+                if close_btn:
+                    await close_btn.click()
+                    await asyncio.sleep(1)
+                    print("✅ Info-Fenster geschlossen.")
             except Exception as e:
                 print(f"⚠️ Fehler beim Schließen des Info-Fensters: {e}")
 
-            # Screenshot zur Kontrolle
             await send_screenshot(page, "Seite nach goto() geladen")
-            print("🌐 Website geladen.")
 
-            # 🧹 Mögliche Overlays entfernen
-            await page.evaluate("""
-                document.querySelectorAll("div[class*='freiefahrt']").forEach(el => el.remove());
-            """)
-            print("🧹 Overlays entfernt.")
-
-            # 📂 Filter-Menü prüfen und ggf. öffnen
+            # Filter-Panel öffnen (robuster)
             try:
-                # Prüfen ob Filter-Menü sichtbar
-                filter_panel = await page.query_selector("div[aria-label='Filtermenü']")
-                if filter_panel:
-                    print("✅ Filter-Menü ist bereits offen.")
-                else:
-                    print("🔍 Filter-Menü nicht sichtbar – versuche zu öffnen...")
-                    filter_button = await page.query_selector("button[aria-label='Filter']") or await page.query_selector("text=Filter")
-                    if filter_button:
-                        await filter_button.scroll_into_view_if_needed()
-                        await asyncio.sleep(1)
-                        await filter_button.click()
-                        await asyncio.sleep(1)
+                if not await page.query_selector("div[aria-label='Filtermenü']"):
+                    toggle_button = await page.query_selector("button[aria-label='Filter öffnen']") or await page.query_selector("button:has-text('Filter')")
+                    if toggle_button:
+                        await toggle_button.click()
+                        await asyncio.sleep(2)
                         print("✅ Filter-Menü geöffnet.")
                     else:
-                        raise Exception("Kein Filter-Button gefunden.")
+                        raise Exception("Filter-Button nicht gefunden")
+                else:
+                    print("✅ Filter-Menü war bereits offen.")
             except Exception as e:
                 print(f"❌ Fehler beim Öffnen des Filters: {e}")
                 await send_screenshot(page, "Fehler beim Öffnen des Filters")
                 return []
 
-            # 🚫 Baustellen & Streckenruhen abwählen
+            # Baustellen & Streckenruhen abwählen
             for label_text in ["Baustellen", "Streckenruhen"]:
                 try:
                     label = await page.query_selector(f"label:has-text('{label_text}')")
@@ -120,33 +100,30 @@ async def scrape_stoerungen():
                         if checkbox and await checkbox.is_checked():
                             await checkbox.click()
                             print(f"✅ '{label_text}' deaktiviert.")
-                        else:
-                            print(f"☑️ '{label_text}' war bereits deaktiviert.")
                 except Exception as e:
-                    print(f"⚠️ Fehler beim Deaktivieren von {label_text}: {e}")
+                    print(f"⚠️ Fehler bei {label_text}: {e}")
 
-            # 📋 Einschränkungen öffnen
+            # Einschränkungen aktivieren
             try:
                 await page.click("text=Einschränkungen", timeout=10000)
-                print("✅ Einschränkungen geöffnet.")
+                print("✅ Einschränkungen aktiviert.")
             except Exception as e:
-                print("❌ Fehler beim Öffnen von Einschränkungen:", e)
+                print("❌ Fehler bei Einschränkungen:", e)
                 await send_screenshot(page, "Fehler beim Tab-Klick")
                 return []
 
             try:
                 await page.wait_for_selector("table tbody tr", timeout=20000)
-                print("✅ Tabelle gefunden.")
+                print("✅ Tabelle geladen.")
             except Exception as e:
                 print("❌ Tabelle nicht gefunden:", e)
                 await send_screenshot(page, "Tabelle nicht gefunden")
                 return []
 
-            # 📊 Daten extrahieren
             rows = await page.query_selector_all("table tbody tr")
-            print(f"🔍 Gefundene Zeilen: {len(rows)}")
-
+            print(f"🔍 Zeilen gefunden: {len(rows)}")
             stoerungen = []
+
             for row in rows:
                 columns = await row.query_selector_all("td")
                 if len(columns) < 8:
@@ -165,13 +142,21 @@ async def scrape_stoerungen():
                     continue
 
                 nachricht = (
-                    "🚨 **Neue Bahn-Störung entdeckt!**\n\n"
-                    f"🆔 **ID:** {id_text.strip()}\n"
-                    f"📌 **Typ:** {typ.strip()}\n"
-                    f"📍 **Ort:** {ort.strip()}\n"
-                    f"🗺️ **Region:** {region.strip()}\n"
-                    f"🚦 **Wirkung:** {wirkung.strip()}\n"
-                    f"📋 **Ursache:** {ursache.strip()}\n"
+                    "🚨 **Neue Bahn-Störung entdeckt!**
+
+"
+                    f"🆔 **ID:** {id_text.strip()}
+"
+                    f"📌 **Typ:** {typ.strip()}
+"
+                    f"📍 **Ort:** {ort.strip()}
+"
+                    f"🗺️ **Region:** {region.strip()}
+"
+                    f"🚦 **Wirkung:** {wirkung.strip()}
+"
+                    f"📋 **Ursache:** {ursache.strip()}
+"
                     f"⏰ **Gültigkeit:** {gueltig_von.strip()} → {gueltig_bis.strip()}"
                 )
 
@@ -180,7 +165,7 @@ async def scrape_stoerungen():
                     "nachricht": nachricht
                 })
 
-            print(f"[{datetime.now()}] ✅ {len(stoerungen)} relevante Störungen erkannt.")
+            print(f"[{datetime.now()}] ✅ {len(stoerungen)} Störungen erkannt.")
             return stoerungen
 
     except Exception as e:
@@ -198,7 +183,6 @@ async def on_ready():
 async def check_stoerungen():
     global last_stoerungen, last_check_time
     await bot.wait_until_ready()
-    print("🚀 check_stoerungen() gestartet")
     channel = bot.get_channel(CHANNEL_ID)
 
     while not bot.is_closed():
@@ -210,7 +194,6 @@ async def check_stoerungen():
                 last_stoerungen.add(s["unique_id"])
                 try:
                     await channel.send(s["nachricht"])
-                    print(f"[{datetime.now()}] ✅ Neue Störung gesendet: {s['unique_id']}")
                 except Exception as e:
                     print(f"❌ Fehler beim Senden: {e}")
         await asyncio.sleep(600)
