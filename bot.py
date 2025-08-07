@@ -142,23 +142,16 @@ async def scrape_stoerungen():
                     continue
 
                 nachricht = (
-                    "🚨 **Neue Bahn-Störung entdeckt!**
-
-"
-                    f"🆔 **ID:** {id_text.strip()}
-"
-                    f"📌 **Typ:** {typ.strip()}
-"
-                    f"📍 **Ort:** {ort.strip()}
-"
-                    f"🗺️ **Region:** {region.strip()}
-"
-                    f"🚦 **Wirkung:** {wirkung.strip()}
-"
-                    f"📋 **Ursache:** {ursache.strip()}
-"
+                    "🚨 **Neue Bahn-Störung entdeckt!**\n\n"
+                    f"🆔 **ID:** {id_text.strip()}\n"
+                    f"📌 **Typ:** {typ.strip()}\n"
+                    f"📍 **Ort:** {ort.strip()}\n"
+                    f"🗺️ **Region:** {region.strip()}\n"
+                    f"🚦 **Wirkung:** {wirkung.strip()}\n"
+                    f"📋 **Ursache:** {ursache.strip()}\n"
                     f"⏰ **Gültigkeit:** {gueltig_von.strip()} → {gueltig_bis.strip()}"
                 )
+
 
                 stoerungen.append({
                     "unique_id": id_text.strip(),
