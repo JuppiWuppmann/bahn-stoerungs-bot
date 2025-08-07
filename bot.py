@@ -65,46 +65,56 @@ async def scrape_stoerungen():
 
             try:
                 await asyncio.sleep(1)
-                overlay = await page.query_selector("div:has-text('Neue Features')")
-                if overlay:
-                    close_btn = await overlay.query_selector("button:has-text('X')") or await overlay.query_selector("button")
-                    if close_btn:
-                        await close_btn.click()
+                modals = await page.query_selector_all("div[class*='modal'], div[class*='dialog'], div[role='dialog']")
+                overlay_closed = False
+                for modal in modals:
+                    modal_text = (await modal.inner_text()).lower()
+                    if "neue features" in modal_text or "hinweis" in modal_text:
+                        print(f"ℹ️ Möglicher Overlay-Text erkannt: {modal_text[:60]}...")
+                        close_button = await modal.query_selector("button:has-text('X')") or await modal.query_selector("button:has-text('Schließen')") or await modal.query_selector("button")
+                        if close_button:
+                            try:
+                                await close_button.scroll_into_view_if_needed()
+                                await asyncio.sleep(0.5)
+                                await close_button.click()
+                                overlay_closed = True
+                                print("✅ Info-Overlay geschlossen.")
+                                await asyncio.sleep(1)
+                                break
+                            except Exception as click_err:
+                                print(f"⚠️ Klick auf Overlay-Schließen-Button fehlgeschlagen: {click_err}")
+                if not overlay_closed:
+                    print("🛠️ Versuche Overlay per JS zu schließen...")
+                    closed = await page.evaluate("""
+                        () => {
+                            const btn = Array.from(document.querySelectorAll("button"))
+                                .find(el => el.innerText?.toLowerCase().includes("x") || el.innerText?.toLowerCase().includes("schließen"));
+                            if (btn) {
+                                btn.click();
+                                return true;
+                            }
+                            return false;
+                        }
+                    """)
+                    if closed:
+                        print("✅ Overlay per JavaScript geschlossen.")
                         await asyncio.sleep(1)
-                        print("✅ Info-Overlay geschlossen.")
                     else:
-                        print("⚠️ Kein Schließen-Button im Info-Fenster gefunden.")
-                else:
-                    print("ℹ️ Kein Info-Overlay erkannt.")
+                        print("ℹ️ Kein Overlay zum Schließen erkannt.")
             except Exception as e:
                 print(f"⚠️ Fehler beim Schließen des Info-Fensters: {e}")
 
-            try:
-                screenshot_bytes = await page.screenshot(type="png")
-                buffer = BytesIO(screenshot_bytes)
-                buffer.name = "nach_goto.png"
-                buffer.seek(0)
-                await send_screenshot(page, "Seite nach goto() geladen")
-            except Exception as e:
-                print("⚠️ Screenshot nach goto() fehlgeschlagen:", e)
-
-            print("🌐 Website geladen.")
-
+            await send_screenshot(page, "Seite nach goto() geladen")
             await page.evaluate("""
                 document.querySelectorAll("div[class*='freiefahrt']").forEach(el => el.remove());
             """)
             print("🧹 Mögliche Overlays entfernt.")
 
             try:
-                filter_offen = await page.is_visible("label:has-text('Baustellen')")
-                
-                if not filter_offen:
+                baustellen_label = await page.query_selector("label:has-text('Baustellen')")
+                if not baustellen_label:
                     print("🔍 Filter-Menü scheint nicht offen – versuche zu öffnen...")
-                    filter_button = (
-                        await page.query_selector("button[aria-label='Filter']")
-                        or await page.query_selector("button:has-text('Filter')")
-                        or await page.query_selector("text=Filter")
-                    )
+                    filter_button = await page.query_selector("button[aria-label='Filter']") or await page.query_selector("button:has-text('Filter')") or await page.query_selector("text=Filter")
                     if filter_button:
                         await filter_button.scroll_into_view_if_needed()
                         await asyncio.sleep(1)
@@ -117,7 +127,6 @@ async def scrape_stoerungen():
                         return []
                 else:
                     print("✅ Filter-Menü ist bereits offen.")
-
             except Exception as e:
                 print("⚠️ Fehler beim Öffnen oder Erkennen des Filter-Menüs:", e)
                 await send_screenshot(page, "Fehler beim Öffnen des Filters")
