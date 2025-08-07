@@ -104,8 +104,8 @@ async def scrape_stoerungen():
 
             # 📂 Filter-Menü sicher öffnen
             try:
-                baustellen_label = await page.query_selector("label:has-text('Baustellen')")
-                if not baustellen_label:
+                filter_offen = await page.is_visible("label:has-text('Baustellen')")
+                if not filter_offen:
                     print("🔍 Filter-Menü scheint nicht offen – versuche zu öffnen...")
                     filter_button = (
                         await page.query_selector("button[aria-label='Filter']")
@@ -122,6 +122,13 @@ async def scrape_stoerungen():
                         print("❌ Kein 'Filter'-Button gefunden.")
                         await send_screenshot(page, "Filter-Button nicht gefunden")
                         return []
+                else:
+                    print("✅ Filter-Menü ist bereits offen.")
+            except Exception as e:
+                print("⚠️ Fehler beim Öffnen oder Erkennen des Filter-Menüs:", e)
+                await send_screenshot(page, "Fehler beim Öffnen des Filters")
+                return []
+
                 else:
                     print("✅ Filter-Menü ist bereits offen.")
             except Exception as e:
