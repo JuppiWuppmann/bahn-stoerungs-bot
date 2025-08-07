@@ -65,7 +65,19 @@ async def scrape_stoerungen():
             print("🌐 Lade Website...")
 
             await page.goto("https://strecken-info.de/", timeout=60000)
+            await page.wait_for_load_state("networkidle")  # warte, bis Netzwerkaktivität nahezu 0
 
+            # Sicherheits-Wartezeit (optional, aber stabiler bei langsamen Systemen)
+            await asyncio.sleep(2)
+
+            # Prüfen, ob etwas wie "Einschränkungen" sichtbar ist
+            try:
+                await page.wait_for_selector("text=Einschränkungen", timeout=15000)
+                print("✅ Seite vollständig geladen (Einschränkungen sichtbar)")
+            except:
+                print("⚠️ Seite scheint nicht vollständig geladen – Einschränkungen nicht sichtbar")
+
+            # Screenshot zur Kontrolle
             try:
                 screenshot_bytes = await page.screenshot(type="png")
                 buffer = BytesIO(screenshot_bytes)
@@ -74,6 +86,7 @@ async def scrape_stoerungen():
                 await send_screenshot(page, "Seite nach goto() geladen")
             except Exception as e:
                 print("⚠️ Screenshot nach goto() fehlgeschlagen:", e)
+
 
             print("🌐 Website geladen.")
 
