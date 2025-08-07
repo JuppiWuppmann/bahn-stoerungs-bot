@@ -1,6 +1,13 @@
 services:
   - type: web
-    name: bahn-stoerungs-bot
+    name: bahnstoerungen-bot
     env: docker
     plan: free
     autoDeploy: true
+    envVars:
+      - key: DISCORD_TOKEN
+        value: dein_discord_bot_token
+      - key: CHANNEL_ID
+        value: 123456789012345678
+      - key: ADMIN_ID
+        value: 123456789012345678
