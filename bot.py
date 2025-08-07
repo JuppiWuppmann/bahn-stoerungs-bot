@@ -58,9 +58,10 @@ async def scrape_stoerungen():
             )
             page = await context.new_page()
             print("🌐 Lade Website...")
-            await page.goto("https://strecken-info.de/", timeout=60000)
-            await page.wait_for_selector("button:has-text('Filter')", timeout=30000)
 
+            await page.goto("https://strecken-info.de/", timeout=60000)
+            await page.wait_for_load_state("networkidle")
+            await asyncio.sleep(2)
 
             # Info-Fenster schließen
             try:
@@ -74,7 +75,7 @@ async def scrape_stoerungen():
 
             await send_screenshot(page, "Seite nach goto() geladen")
 
-            # Filter-Panel öffnen (robuster)
+            # Filter-Menü öffnen (robust)
             try:
                 if not await page.query_selector("div[aria-label='Filtermenü']"):
                     toggle_button = await page.query_selector("button[aria-label='Filter öffnen']") or await page.query_selector("button:has-text('Filter')")
@@ -112,14 +113,16 @@ async def scrape_stoerungen():
                 await send_screenshot(page, "Fehler beim Tab-Klick")
                 return []
 
+            # Tabelle abwarten
             try:
-                await page.wait_for_selector("table tbody tr", timeout=20000)
+                await page.wait_for_selector("table tbody tr", timeout=20000, state="visible")
                 print("✅ Tabelle geladen.")
             except Exception as e:
                 print("❌ Tabelle nicht gefunden:", e)
                 await send_screenshot(page, "Tabelle nicht gefunden")
                 return []
 
+            # Daten extrahieren
             rows = await page.query_selector_all("table tbody tr")
             print(f"🔍 Zeilen gefunden: {len(rows)}")
             stoerungen = []
@@ -151,7 +154,6 @@ async def scrape_stoerungen():
                     f"📋 **Ursache:** {ursache.strip()}\n"
                     f"⏰ **Gültigkeit:** {gueltig_von.strip()} → {gueltig_bis.strip()}"
                 )
-
 
                 stoerungen.append({
                     "unique_id": id_text.strip(),
@@ -215,3 +217,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("🛑 Bot manuell beendet.")
+
