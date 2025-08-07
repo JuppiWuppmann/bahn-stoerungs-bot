@@ -51,7 +51,6 @@ async def send_screenshot(page, fehlertext="Fehler"):
     except Exception as e:
         print("⚠️ Fehler beim Screenshot-Senden:", e)
 
-# 🔍 Scraping-Funktion
 async def scrape_stoerungen():
     print(f"[{datetime.now()}] 🔁 scrape_stoerungen gestartet")
     try:
@@ -65,17 +64,25 @@ async def scrape_stoerungen():
             print("🌐 Lade Website...")
 
             await page.goto("https://strecken-info.de/", timeout=60000)
-            await page.wait_for_load_state("networkidle")  # warte, bis Netzwerkaktivität nahezu 0
-
-            # Sicherheits-Wartezeit (optional, aber stabiler bei langsamen Systemen)
+            await page.wait_for_load_state("networkidle")
             await asyncio.sleep(2)
 
-            # Prüfen, ob etwas wie "Einschränkungen" sichtbar ist
+            # 🧹 Info-Overlay schließen
             try:
-                await page.wait_for_selector("text=Einschränkungen", timeout=15000)
-                print("✅ Seite vollständig geladen (Einschränkungen sichtbar)")
-            except:
-                print("⚠️ Seite scheint nicht vollständig geladen – Einschränkungen nicht sichtbar")
+                await asyncio.sleep(1)
+                overlay = await page.query_selector("div:has-text('Neue Features')")
+                if overlay:
+                    close_btn = await overlay.query_selector("button:has-text('X')") or await overlay.query_selector("button")
+                    if close_btn:
+                        await close_btn.click()
+                        await asyncio.sleep(1)
+                        print("✅ Info-Overlay geschlossen.")
+                    else:
+                        print("⚠️ Kein Schließen-Button im Info-Fenster gefunden.")
+                else:
+                    print("ℹ️ Kein Info-Overlay erkannt.")
+            except Exception as e:
+                print(f"⚠️ Fehler beim Schließen des Info-Fensters: {e}")
 
             # Screenshot zur Kontrolle
             try:
@@ -87,39 +94,24 @@ async def scrape_stoerungen():
             except Exception as e:
                 print("⚠️ Screenshot nach goto() fehlgeschlagen:", e)
 
-
             print("🌐 Website geladen.")
 
-            try:
-                await page.wait_for_selector("text=Einschränkungen", timeout=20000)
-                print("✅ Einschränkungen sichtbar.")
-            except:
-                print("⚠️ Einschränkungen nicht sichtbar – Seite lädt evtl. nicht korrekt.")
-                await send_screenshot(page, "Einschränkungen-Tab nicht sichtbar")
-                return []
-
+            # 🧹 Overlays entfernen
             await page.evaluate("""
                 document.querySelectorAll("div[class*='freiefahrt']").forEach(el => el.remove());
             """)
             print("🧹 Mögliche Overlays entfernt.")
 
+            # 📂 Filter-Menü sicher öffnen
             try:
-                await page.wait_for_selector("button:has-text('X')", timeout=7000)
-                close_btn = await page.query_selector("button:has-text('X')")
-                if close_btn:
-                    await close_btn.click()
-                    print("✅ Info-Fenster geschlossen.")
-            except:
-                print("⚠️ Kein Info-Fenster oder bereits geschlossen")
-
-            # 📂 Sicherstellen, dass das Filter-Menü offen ist
-            try:
-                # Versuch: Ist das Filter-Menü offen?
                 baustellen_label = await page.query_selector("label:has-text('Baustellen')")
                 if not baustellen_label:
                     print("🔍 Filter-Menü scheint nicht offen – versuche zu öffnen...")
-                    # Klicke auf Filter-Button
-                    filter_button = await page.query_selector("button[aria-label='Filter']") or await page.query_selector("text=Filter")
+                    filter_button = (
+                        await page.query_selector("button[aria-label='Filter']")
+                        or await page.query_selector("button:has-text('Filter')")
+                        or await page.query_selector("text=Filter")
+                    )
                     if filter_button:
                         await filter_button.scroll_into_view_if_needed()
                         await asyncio.sleep(1)
@@ -137,6 +129,7 @@ async def scrape_stoerungen():
                 await send_screenshot(page, "Fehler beim Öffnen des Filters")
                 return []
 
+            # 🚫 Baustellen / Streckenruhen abwählen
             for label_text in ["Baustellen", "Streckenruhen"]:
                 try:
                     label = await page.query_selector(f"label:has-text('{label_text}')")
@@ -150,6 +143,7 @@ async def scrape_stoerungen():
                 except Exception as e:
                     print(f"⚠️ Fehler beim Deaktivieren von {label_text}:", e)
 
+            # 📋 Einschränkungen anzeigen
             try:
                 await page.click("text=Einschränkungen", timeout=10000)
                 print("✅ Einschränkungen geöffnet.")
@@ -185,10 +179,7 @@ async def scrape_stoerungen():
                 gueltig_bis = await columns[7].inner_text()
 
                 typ_klein = typ.strip().lower()
-                print(f"📄 Typ erkannt: '{typ.strip()}' → '{typ_klein}'")
-
                 if typ_klein in ["baustelle", "streckenruhe"]:
-                    print(f"⏭️ Ignoriere Eintrag mit Typ: {typ_klein}")
                     continue
 
                 nachricht = (
