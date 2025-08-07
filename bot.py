@@ -83,6 +83,17 @@ async def scrape_stoerungen():
             await page.click("text=Einschränkungen")
             await asyncio.sleep(2)
 
+            # 👉 Neu: Sortieren nach "Gültigkeit von" (absteigend)
+            try:
+                sort_button = await page.wait_for_selector('th:has-text("Gültigkeit von")', timeout=5000)
+                await sort_button.click()
+                await page.wait_for_timeout(500)
+                await sort_button.click()
+                await page.wait_for_timeout(1000)
+            except Exception as e:
+                print("⚠️ Sortierung fehlgeschlagen:", e)
+
+            # Tabelle laden
             await page.wait_for_selector("table tbody tr", timeout=15000)
             rows = await page.query_selector_all("table tbody tr")
 
