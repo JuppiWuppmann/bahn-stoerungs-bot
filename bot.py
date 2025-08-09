@@ -22,10 +22,10 @@ async def handle_health(request):
     return web.Response(text="OK")
 
 async def start_web_server():
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get("PORT", 10000))  # Render-Port nutzen, lokal 10000 als Default
     app = web.Application()
     app.router.add_get("/", handle_health)
-    app.router.add_get("/health", handle_health)  # ✅ zusätzlicher Health-Check-Pfad
+    app.router.add_get("/health", handle_health)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
