@@ -7,10 +7,12 @@ from aiohttp import web
 from playwright.async_api import async_playwright
 from io import BytesIO
 
+# --- ENV Variablen ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 ADMIN_ID = os.getenv("ADMIN_ID")
 
+# --- Discord Bot Setup ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -18,22 +20,21 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 last_stoerungen = set()
 last_check_time = None
 
-# ----------------- HEALTH SERVER -----------------
+# --- Healthcheck ---
 async def handle_health(request):
-    return web.Response(text="OK", content_type="text/plain")
+    return web.Response(text="OK")
 
 async def start_web_server():
-    port = int(os.environ.get("PORT", 10000))  # Render nutzt diesen Port
+    port = int(os.environ.get("PORT", 8080))
     app = web.Application()
     app.router.add_get("/", handle_health)
-    app.router.add_get("/health", handle_health)  # zusätzlicher Pfad
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"🌐 Health-Server läuft auf Port {port}")
-# --------------------------------------------------
+    print(f"🌐 Webserver läuft auf Port {port} (Healthcheck aktiv)")
 
+# --- Screenshot-Funktion ---
 async def send_screenshot(page, fehlertext="Fehler"):
     channel = bot.get_channel(CHANNEL_ID)
     if channel:
@@ -46,6 +47,7 @@ async def send_screenshot(page, fehlertext="Fehler"):
             file=discord.File(fp=buffer, filename="screenshot.png")
         )
 
+# --- Scraping ---
 async def scrape_stoerungen():
     global last_stoerungen
     print(f"[{datetime.now()}] 🔁 scrape_stoerungen gestartet")
@@ -59,9 +61,9 @@ async def scrape_stoerungen():
             await page.wait_for_load_state("networkidle")
             await asyncio.sleep(2)
 
-            # Info schließen
+            # Dialog schließen
             try:
-                close_btn = await page.query_selector("div[class*=MuiDialog] button[aria-label='Close']")
+                close_btn = await page.query_selector("div[class*=MuiDialog] button[aria-label='Close']") 
                 if close_btn:
                     await close_btn.click()
                     await asyncio.sleep(1)
@@ -86,7 +88,7 @@ async def scrape_stoerungen():
             await page.click("text=Einschränkungen")
             await asyncio.sleep(2)
 
-            # Sortierung nach "Gültigkeit von" (zweimal klicken)
+            # Sortieren nach "Gültigkeit von" → zweimal klicken
             try:
                 sort_button = await page.wait_for_selector('th:has-text("Gültigkeit von")', timeout=5000)
                 await sort_button.click()
@@ -101,7 +103,6 @@ async def scrape_stoerungen():
             rows = await page.query_selector_all("table tbody tr")
 
             new_stoerungen = []
-
             for row in rows:
                 columns = await row.query_selector_all("td")
                 if len(columns) < 8:
@@ -139,6 +140,7 @@ async def scrape_stoerungen():
         print(f"❌ Fehler beim Scraping: {e}")
         return []
 
+# --- Prüfschleife ---
 async def check_stoerungen():
     global last_stoerungen, last_check_time
     await bot.wait_until_ready()
@@ -155,6 +157,7 @@ async def check_stoerungen():
 
         await asyncio.sleep(600)
 
+# --- Statusbefehl ---
 @bot.command()
 async def status(ctx):
     if ADMIN_ID and str(ctx.author.id) != str(ADMIN_ID):
@@ -170,10 +173,11 @@ async def on_ready():
     print(f"✅ Bot gestartet als {bot.user}")
     bot.loop.create_task(check_stoerungen())
 
+# --- Main ---
 async def main():
-    # Health-Server sofort starten
-    asyncio.create_task(start_web_server())
-    # Discord-Bot starten
+    # Erst Healthserver starten (Render erwartet Port)
+    await start_web_server()
+    # Danach Bot starten
     await bot.start(DISCORD_TOKEN)
 
 if __name__ == "__main__":
@@ -181,4 +185,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("🛑 Bot wurde beendet.")
-
