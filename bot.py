@@ -18,19 +18,21 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 last_stoerungen = set()
 last_check_time = None
 
+# ----------------- HEALTH SERVER -----------------
 async def handle_health(request):
-    return web.Response(text="OK")
+    return web.Response(text="OK", content_type="text/plain")
 
 async def start_web_server():
-    port = int(os.environ.get("PORT", 10000))  # Render-Port nutzen, lokal 10000 als Default
+    port = int(os.environ.get("PORT", 10000))  # Render nutzt diesen Port
     app = web.Application()
     app.router.add_get("/", handle_health)
-    app.router.add_get("/health", handle_health)
+    app.router.add_get("/health", handle_health)  # zusätzlicher Pfad
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"🌐 Webserver läuft auf Port {port}")
+    print(f"🌐 Health-Server läuft auf Port {port}")
+# --------------------------------------------------
 
 async def send_screenshot(page, fehlertext="Fehler"):
     channel = bot.get_channel(CHANNEL_ID)
@@ -84,7 +86,7 @@ async def scrape_stoerungen():
             await page.click("text=Einschränkungen")
             await asyncio.sleep(2)
 
-            # 👉 Neu: Sortieren nach "Gültigkeit von" (absteigend)
+            # Sortierung nach "Gültigkeit von" (zweimal klicken)
             try:
                 sort_button = await page.wait_for_selector('th:has-text("Gültigkeit von")', timeout=5000)
                 await sort_button.click()
@@ -169,13 +171,14 @@ async def on_ready():
     bot.loop.create_task(check_stoerungen())
 
 async def main():
-    await asyncio.gather(
-        start_web_server(),
-        bot.start(DISCORD_TOKEN)
-    )
+    # Health-Server sofort starten
+    asyncio.create_task(start_web_server())
+    # Discord-Bot starten
+    await bot.start(DISCORD_TOKEN)
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         print("🛑 Bot wurde beendet.")
+
