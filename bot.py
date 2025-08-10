@@ -49,7 +49,7 @@ async def send_screenshot(page, fehlertext="Fehler"):
 # --- Haupt-Scraping ---
 async def scrape_stoerungen():
     global last_stoerungen
-    print(f"[{datetime.now()}] 🔁 scrape_stoerungen gestartet")
+    print(f"\n[{datetime.now()}] 🔁 scrape_stoerungen gestartet")
 
     try:
         async with async_playwright() as p:
@@ -66,14 +66,16 @@ async def scrape_stoerungen():
                 if close_btn:
                     await close_btn.click()
                     await asyncio.sleep(1)
+                    print("ℹ️ Info-Dialog geschlossen.")
             except:
-                pass
+                print("ℹ️ Kein Info-Dialog gefunden.")
 
             # Filter öffnen
             toggle_button = await page.query_selector("button[aria-label='Filter öffnen']")
             if toggle_button:
                 await toggle_button.click()
                 await asyncio.sleep(2)
+                print("✅ Filter geöffnet.")
 
             # Baustellen & Streckenruhen deaktivieren
             for label_text in ["Baustellen", "Streckenruhen"]:
@@ -82,27 +84,34 @@ async def scrape_stoerungen():
                     checkbox = await label.query_selector("input[type='checkbox']")
                     if checkbox and await checkbox.is_checked():
                         await checkbox.click()
+                        print(f"🚫 {label_text} deaktiviert.")
 
             # Einschränkungen aktivieren
-            await page.click("text=Einschränkungen")
-            await asyncio.sleep(2)
+            try:
+                await page.click("text=Einschränkungen")
+                await asyncio.sleep(2)
+                print("✅ Einschränkungen aktiviert.")
+            except:
+                print("⚠️ Einschränkungen-Button nicht gefunden.")
 
-            # 👉 Sortieren nach "Gültigkeit von" (zweimal klicken für neueste zuerst)
+            # Sortieren
             try:
                 sort_button = await page.wait_for_selector('th:has-text("Gültigkeit von")', timeout=5000)
                 await sort_button.click()
                 await page.wait_for_timeout(500)
                 await sort_button.click()
                 await page.wait_for_timeout(1000)
+                print("✅ Tabelle nach 'Gültigkeit von' sortiert.")
             except Exception as e:
-                print("⚠️ Sortierung fehlgeschlagen:", e)
+                print(f"⚠️ Sortierung fehlgeschlagen: {e}")
+                await send_screenshot(page, "Sortierung fehlgeschlagen")
 
             # Tabelle laden
             await page.wait_for_selector("table tbody tr", timeout=15000)
             rows = await page.query_selector_all("table tbody tr")
+            print(f"📊 Gefundene Tabellenzeilen: {len(rows)}")
 
             new_stoerungen = []
-
             for row in rows:
                 columns = await row.query_selector_all("td")
                 if len(columns) < 8:
@@ -116,6 +125,8 @@ async def scrape_stoerungen():
                 ursache = (await columns[5].inner_text()).strip()
                 gueltig_von = (await columns[6].inner_text()).strip()
                 gueltig_bis = (await columns[7].inner_text()).strip()
+
+                print(f"➡️ ID={id_text}, Typ={typ}, Ort={ort}")
 
                 if typ.lower() in ["baustelle", "streckenruhe"]:
                     continue
@@ -133,7 +144,7 @@ async def scrape_stoerungen():
                     )
                     new_stoerungen.append({"id": id_text, "text": message})
 
-            print(f"🔍 Neue Störungen: {len(new_stoerungen)}")
+            print(f"🔍 Neue Störungen gefunden: {len(new_stoerungen)}")
             return new_stoerungen
 
     except Exception as e:
@@ -145,17 +156,29 @@ async def check_stoerungen():
     global last_stoerungen, last_check_time
     await bot.wait_until_ready()
     channel = bot.get_channel(CHANNEL_ID)
+    print(f"📢 CHANNEL_ID={CHANNEL_ID}, channel={channel}")
+
+    if channel is None:
+        print("⚠️ WARNUNG: channel ist None! Bitte CHANNEL_ID in Render-Umgebungsvariablen prüfen.")
 
     while not bot.is_closed():
+        print("\n⏳ Starte neuen Check...")
         stoerungen = await scrape_stoerungen()
         last_check_time = datetime.now()
 
         for s in stoerungen:
             if s["id"] not in last_stoerungen:
                 last_stoerungen.add(s["id"])
-                await channel.send(s["text"])
+                try:
+                    if channel:
+                        await channel.send(s["text"])
+                        print(f"✅ Nachricht gesendet für ID {s['id']}")
+                    else:
+                        print(f"⚠️ Nachricht für {s['id']} nicht gesendet, channel=None")
+                except Exception as e:
+                    print(f"❌ Fehler beim Senden an Discord: {e}")
 
-        await asyncio.sleep(600)  # alle 10 Minuten prüfen
+        await asyncio.sleep(600)
 
 # --- Status-Befehl ---
 @bot.command()
