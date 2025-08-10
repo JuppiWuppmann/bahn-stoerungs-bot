@@ -47,63 +47,79 @@ async def send_screenshot(page, fehlertext="Fehler"):
         )
 
 # --- Haupt-Scraping ---
+# --- Haupt-Scraping ---
 async def scrape_stoerungen():
     global last_stoerungen
     print(f"[{datetime.now()}] 🔁 scrape_stoerungen gestartet")
 
     try:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
             context = await browser.new_context()
             page = await context.new_page()
             await page.goto("https://strecken-info.de/", timeout=60000)
             await page.wait_for_load_state("networkidle")
             await asyncio.sleep(2)
 
-            # 🍪 Cookie-Popup schließen
+            # === 1. Cookie/Analyse-Popup schließen ===
             try:
+                print("🔍 Prüfe auf Analyse-/Cookie-Popup...")
                 ablehnen_btn = await page.query_selector("button:has-text('Ablehnen')")
                 if ablehnen_btn:
                     await ablehnen_btn.click()
                     await asyncio.sleep(1)
-                    print("✅ Cookie-Hinweis abgelehnt")
+                    print("✅ Analyse-/Cookie-Popup geschlossen")
                 else:
-                    print("ℹ️ Kein Cookie-Popup gefunden")
+                    print("ℹ️ Kein Popup gefunden")
             except Exception as e:
-                print(f"⚠️ Konnte Cookie-Popup nicht schließen: {e}")
+                print(f"⚠️ Fehler beim Schließen des Popups: {e}")
 
-            # Info schließen
+            # === 2. Blaues Infofenster schließen ===
             try:
-                close_btn = await page.query_selector("div[class*=MuiDialog] button[aria-label='Close']")
-                if close_btn:
-                    await close_btn.click()
+                print("🔍 Prüfe auf Infofenster...")
+                close_hint_btn = await page.query_selector("div[class*=MuiDialog] button[aria-label='Close']")
+                if close_hint_btn:
+                    await close_hint_btn.click()
                     await asyncio.sleep(1)
-            except:
-                pass
+                    print("✅ Infofenster geschlossen")
+                else:
+                    print("ℹ️ Kein Infofenster gefunden")
+            except Exception as e:
+                print(f"⚠️ Fehler beim Schließen des Infofensters: {e}")
 
-            # Filter öffnen
+            # === 3. Filter öffnen (nur wenn vorhanden) ===
             try:
-                toggle_button = await page.wait_for_selector("button[aria-label='Filter öffnen']", timeout=10000)
-                if toggle_button:
-                    await toggle_button.click()
-                    await asyncio.sleep(2)
+                filter_open_btn = await page.query_selector("button[aria-label='Filter öffnen']")
+                if filter_open_btn:
+                    await filter_open_btn.click()
+                    await asyncio.sleep(1)
+                    print("✅ Filter geöffnet")
+                else:
+                    print("ℹ️ Filter bereits offen oder nicht sichtbar")
             except Exception as e:
                 await send_screenshot(page, f"Filter-Panel konnte nicht geöffnet werden: {e}")
                 return []
 
-            # Baustellen & Streckenruhen deaktivieren
-            for label_text in ["Baustellen", "Streckenruhen"]:
-                label = await page.query_selector(f"label:has-text('{label_text}')")
-                if label:
-                    checkbox = await label.query_selector("input[type='checkbox']")
-                    if checkbox and await checkbox.is_checked():
-                        await checkbox.click()
+            # === 4. Baustellen & Streckenruhe deaktivieren ===
+            try:
+                for label_text in ["Baustellen", "Streckenruhen"]:
+                    label = await page.query_selector(f"label:has-text('{label_text}')")
+                    if label:
+                        checkbox = await label.query_selector("input[type='checkbox']")
+                        if checkbox and await checkbox.is_checked():
+                            await checkbox.click()
+                            print(f"✅ {label_text} deaktiviert")
+            except Exception as e:
+                print(f"⚠️ Konnte Filter nicht anwenden: {e}")
 
-            # Einschränkungen aktivieren
-            await page.click("text=Einschränkungen")
-            await asyncio.sleep(2)
+            # === 5. Einschränkungen aktivieren ===
+            try:
+                await page.click("text=Einschränkungen")
+                await asyncio.sleep(2)
+            except Exception as e:
+                print(f"⚠️ Fehler beim Aktivieren von Einschränkungen: {e}")
 
-            # 👉 Sortieren nach "Gültigkeit von"
+            # === 6. Sortieren nach "Gültigkeit von" ===
             try:
                 sort_button = await page.wait_for_selector('th:has-text("Gültigkeit von")', timeout=5000)
                 await sort_button.click()
@@ -112,14 +128,13 @@ async def scrape_stoerungen():
                 await page.wait_for_timeout(1000)
             except Exception as e:
                 await send_screenshot(page, f"Sortierung fehlgeschlagen: {e}")
-                print("⚠️ Sortierung fehlgeschlagen:", e)
+                print(f"⚠️ Sortierung fehlgeschlagen: {e}")
 
-            # Tabelle laden
+            # === 7. Tabelle laden ===
             await page.wait_for_selector("table tbody tr", timeout=15000)
             rows = await page.query_selector_all("table tbody tr")
 
             new_stoerungen = []
-
             for row in rows:
                 columns = await row.query_selector_all("td")
                 if len(columns) < 8:
