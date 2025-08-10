@@ -18,7 +18,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 last_stoerungen = set()
 last_check_time = None
 
-# --- Healthcheck-Endpunkt ---
+# --- Healthcheck ---
 async def handle_health(request):
     return web.Response(text="OK")
 
@@ -33,7 +33,7 @@ async def start_web_server():
     await site.start()
     print(f"🌐 Health-Webserver läuft auf Port {port}")
 
-# --- Screenshot senden bei Fehlern ---
+# --- Screenshot bei Fehlern ---
 async def send_screenshot(page, fehlertext="Fehler"):
     channel = bot.get_channel(CHANNEL_ID)
     if channel:
@@ -46,7 +46,28 @@ async def send_screenshot(page, fehlertext="Fehler"):
             file=discord.File(fp=buffer, filename="screenshot.png")
         )
 
-# --- Haupt-Scraping ---
+# --- Popups schließen ---
+async def close_popups(page):
+    # Analyse-/Cookie-Popup (rot)
+    try:
+        analyse_ablehnen = await page.query_selector("button:has-text('Ablehnen')")
+        if analyse_ablehnen:
+            await analyse_ablehnen.click()
+            await asyncio.sleep(1)
+            print("✅ Analyse-Popup abgelehnt")
+    except Exception as e:
+        print(f"⚠️ Konnte Analyse-Popup nicht schließen: {e}")
+
+    # Infofenster (blau)
+    try:
+        info_close = await page.query_selector("div[class*=MuiDialog] button[aria-label='Close']")
+        if info_close:
+            await info_close.click()
+            await asyncio.sleep(1)
+            print("✅ Infofenster geschlossen")
+    except Exception as e:
+        print(f"⚠️ Fehler beim Schließen des Infofensters: {e}")
+
 # --- Haupt-Scraping ---
 async def scrape_stoerungen():
     global last_stoerungen
@@ -54,87 +75,57 @@ async def scrape_stoerungen():
 
     try:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
+            browser = await p.chromium.launch(headless=True)
             context = await browser.new_context()
             page = await context.new_page()
             await page.goto("https://strecken-info.de/", timeout=60000)
             await page.wait_for_load_state("networkidle")
             await asyncio.sleep(2)
 
-            # === 1. Cookie/Analyse-Popup schließen ===
-            try:
-                print("🔍 Prüfe auf Analyse-/Cookie-Popup...")
-                ablehnen_btn = await page.query_selector("button:has-text('Ablehnen')")
-                if ablehnen_btn:
-                    await ablehnen_btn.click()
-                    await asyncio.sleep(1)
-                    print("✅ Analyse-/Cookie-Popup geschlossen")
-                else:
-                    print("ℹ️ Kein Popup gefunden")
-            except Exception as e:
-                print(f"⚠️ Fehler beim Schließen des Popups: {e}")
+            # Popups schließen
+            await close_popups(page)
 
-            # === 2. Blaues Infofenster schließen ===
+            # Filter öffnen
             try:
-                print("🔍 Prüfe auf Infofenster...")
-                close_hint_btn = await page.query_selector("div[class*=MuiDialog] button[aria-label='Close']")
-                if close_hint_btn:
-                    await close_hint_btn.click()
-                    await asyncio.sleep(1)
-                    print("✅ Infofenster geschlossen")
-                else:
-                    print("ℹ️ Kein Infofenster gefunden")
-            except Exception as e:
-                print(f"⚠️ Fehler beim Schließen des Infofensters: {e}")
-
-            # === 3. Filter öffnen (nur wenn vorhanden) ===
-            try:
-                filter_open_btn = await page.query_selector("button[aria-label='Filter öffnen']")
-                if filter_open_btn:
-                    await filter_open_btn.click()
-                    await asyncio.sleep(1)
+                toggle_button = await page.wait_for_selector("button[aria-label='Filter öffnen']", timeout=10000)
+                if toggle_button:
+                    await toggle_button.click()
+                    await asyncio.sleep(2)
                     print("✅ Filter geöffnet")
-                else:
-                    print("ℹ️ Filter bereits offen oder nicht sichtbar")
             except Exception as e:
                 await send_screenshot(page, f"Filter-Panel konnte nicht geöffnet werden: {e}")
                 return []
 
-            # === 4. Baustellen & Streckenruhe deaktivieren ===
-            try:
-                for label_text in ["Baustellen", "Streckenruhen"]:
-                    label = await page.query_selector(f"label:has-text('{label_text}')")
-                    if label:
-                        checkbox = await label.query_selector("input[type='checkbox']")
-                        if checkbox and await checkbox.is_checked():
-                            await checkbox.click()
-                            print(f"✅ {label_text} deaktiviert")
-            except Exception as e:
-                print(f"⚠️ Konnte Filter nicht anwenden: {e}")
+            # Baustellen & Streckenruhen deaktivieren
+            for label_text in ["Baustellen", "Streckenruhen"]:
+                label = await page.query_selector(f"label:has-text('{label_text}')")
+                if label:
+                    checkbox = await label.query_selector("input[type='checkbox']")
+                    if checkbox and await checkbox.is_checked():
+                        await checkbox.click()
 
-            # === 5. Einschränkungen aktivieren ===
-            try:
-                await page.click("text=Einschränkungen")
-                await asyncio.sleep(2)
-            except Exception as e:
-                print(f"⚠️ Fehler beim Aktivieren von Einschränkungen: {e}")
+            # Einschränkungen aktivieren
+            await page.click("text=Einschränkungen")
+            await asyncio.sleep(2)
 
-            # === 6. Sortieren nach "Gültigkeit von" ===
+            # Sortieren nach "Gültigkeit von"
             try:
                 sort_button = await page.wait_for_selector('th:has-text("Gültigkeit von")', timeout=5000)
                 await sort_button.click()
-                await page.wait_for_timeout(500)
+                await asyncio.sleep(0.5)
                 await sort_button.click()
-                await page.wait_for_timeout(1000)
+                await asyncio.sleep(1)
+                print("✅ Sortierung abgeschlossen")
             except Exception as e:
                 await send_screenshot(page, f"Sortierung fehlgeschlagen: {e}")
-                print(f"⚠️ Sortierung fehlgeschlagen: {e}")
+                print("⚠️ Sortierung fehlgeschlagen:", e)
 
-            # === 7. Tabelle laden ===
+            # Tabelle laden
             await page.wait_for_selector("table tbody tr", timeout=15000)
             rows = await page.query_selector_all("table tbody tr")
 
             new_stoerungen = []
+
             for row in rows:
                 columns = await row.query_selector_all("td")
                 if len(columns) < 8:
@@ -187,7 +178,7 @@ async def check_stoerungen():
                 last_stoerungen.add(s["id"])
                 await channel.send(s["text"])
 
-        await asyncio.sleep(600)  # alle 10 Minuten prüfen
+        await asyncio.sleep(600)
 
 # --- Status-Befehl ---
 @bot.command()
@@ -208,8 +199,8 @@ async def on_ready():
 # --- Start ---
 async def main():
     await asyncio.gather(
-        start_web_server(),       # Health-Server starten
-        bot.start(DISCORD_TOKEN)  # Discord-Bot starten
+        start_web_server(),
+        bot.start(DISCORD_TOKEN)
     )
 
 if __name__ == "__main__":
