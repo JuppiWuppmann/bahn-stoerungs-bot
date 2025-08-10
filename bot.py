@@ -4,7 +4,7 @@ from datetime import datetime
 from discord.ext import commands
 import discord
 from aiohttp import web
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import async_playwright
 from io import BytesIO
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -47,67 +47,26 @@ async def send_screenshot(page, fehlertext="Fehler"):
         )
 
 # --- Overlays schließen ---
-async def close_overlays(page, max_wait_seconds: float = 8.0):
-    start = datetime.now().timestamp()
-    while datetime.now().timestamp() - start < max_wait_seconds:
-        closed_any = False
+async def close_overlays(page):
+    # 1️⃣ Analyse-/Cookie-Banner
+    try:
+        ablehnen_btn = await page.query_selector("button:has-text('Ablehnen')")
+        if ablehnen_btn:
+            await ablehnen_btn.click()
+            await asyncio.sleep(1)
+            print("✅ Analyse-/Cookie-Banner abgelehnt")
+    except Exception as e:
+        print(f"ℹ️ Kein Analyse-/Cookie-Banner zu schließen: {e}")
 
-        # 1) Usercentrics Cookie-Banner
-        try:
-            uc_banner = await page.query_selector("#usercentrics-cmp-ui")
-            if uc_banner:
-                print("🔍 Usercentrics-Overlay erkannt – versuche zu schließen...")
-                btn_decline = await page.query_selector("button:has-text('Ablehnen')")
-                btn_accept = await page.query_selector("button:has-text('Alle akzeptieren')")
-                if btn_decline:
-                    await btn_decline.click(force=True)
-                    closed_any = True
-                    print("✅ Usercentrics: 'Ablehnen' geklickt")
-                elif btn_accept:
-                    await btn_accept.click(force=True)
-                    closed_any = True
-                    print("✅ Usercentrics: 'Alle akzeptieren' geklickt")
-                await asyncio.sleep(1)
-        except Exception:
-            pass
-
-        # 2) Allgemeine Cookie-Buttons
-        for text in ["Ablehnen", "Alle akzeptieren", "Alles akzeptieren"]:
-            try:
-                btn = await page.query_selector(f"button:has-text('{text}')")
-                if btn:
-                    await btn.click(force=True)
-                    await asyncio.sleep(0.6)
-                    print(f"✅ Overlay: '{text}' geklickt")
-                    closed_any = True
-            except Exception:
-                pass
-
-        # 3) Info-Dialoge
-        try:
-            dlg_close = await page.query_selector("div[role='dialog'] button[aria-label='Close']")
-            if dlg_close:
-                await dlg_close.click(force=True)
-                await asyncio.sleep(0.6)
-                print("✅ Info-Dialog geschlossen")
-                closed_any = True
-        except Exception:
-            pass
-
-        try:
-            dlg_close2 = await page.query_selector("div[role='dialog'] button:has-text('Schließen')")
-            if dlg_close2:
-                await dlg_close2.click(force=True)
-                await asyncio.sleep(0.6)
-                print("✅ Info-Dialog (Schließen) geschlossen")
-                closed_any = True
-        except Exception:
-            pass
-
-        if not closed_any:
-            break
-
-    await asyncio.sleep(0.3)
+    # 2️⃣ Info-Popup (blaues "Neue Funktion bei Züge online")
+    try:
+        info_close = await page.query_selector("div[role='dialog'] button[aria-label='Close']")
+        if info_close:
+            await info_close.click()
+            await asyncio.sleep(1)
+            print("✅ Info-Overlay geschlossen")
+    except Exception as e:
+        print(f"ℹ️ Kein Info-Overlay zu schließen: {e}")
 
 # --- Haupt-Scraping ---
 async def scrape_stoerungen():
@@ -123,26 +82,23 @@ async def scrape_stoerungen():
             await page.wait_for_load_state("networkidle")
             await asyncio.sleep(2)
 
-            # Overlays direkt schließen
+            # Erstmal alles schließen, was stören könnte
             await close_overlays(page)
 
             # Filter öffnen
             try:
-                filter_button = await page.wait_for_selector("button[aria-label='Filter öffnen']", timeout=10000)
-                try:
-                    await filter_button.click()
-                except PlaywrightTimeoutError:
-                    print("⚠️ Filter-Button Klick blockiert – versuche force=True")
-                    await filter_button.click(force=True)
+                toggle_button = await page.wait_for_selector("button[aria-label='Filter öffnen']", timeout=10000)
+                await toggle_button.click()
                 await asyncio.sleep(2)
                 print("✅ Filter geöffnet")
             except Exception as e:
                 await send_screenshot(page, f"Filter-Panel konnte nicht geöffnet werden: {e}")
                 return []
 
+            # Nochmal checken, falls sich nach Filter-Öffnung wieder ein Overlay einblendet
             await close_overlays(page)
 
-            # Baustellen & Streckenruhen deaktivieren
+            # Baustellen & Streckenruhen ausschalten
             for label_text in ["Baustellen", "Streckenruhen"]:
                 try:
                     label = await page.query_selector(f"label:has-text('{label_text}')")
@@ -164,6 +120,7 @@ async def scrape_stoerungen():
                 await send_screenshot(page, f"Einschränkungen konnten nicht aktiviert werden: {e}")
                 return []
 
+            # Nochmal alles schließen vor dem Sortieren
             await close_overlays(page)
 
             # Sortieren nach "Gültigkeit von"
