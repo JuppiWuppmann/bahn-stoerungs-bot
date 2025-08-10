@@ -7,12 +7,10 @@ from aiohttp import web
 from playwright.async_api import async_playwright
 from io import BytesIO
 
-# --- ENV Variablen ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 ADMIN_ID = os.getenv("ADMIN_ID")
 
-# --- Discord Bot Setup ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -20,7 +18,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 last_stoerungen = set()
 last_check_time = None
 
-# --- Healthcheck ---
+# --- Healthcheck-Endpunkt ---
 async def handle_health(request):
     return web.Response(text="OK")
 
@@ -28,13 +26,14 @@ async def start_web_server():
     port = int(os.environ.get("PORT", 8080))
     app = web.Application()
     app.router.add_get("/", handle_health)
+    app.router.add_get("/health", handle_health)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"🌐 Webserver läuft auf Port {port} (Healthcheck aktiv)")
+    print(f"🌐 Health-Webserver läuft auf Port {port}")
 
-# --- Screenshot-Funktion ---
+# --- Screenshot senden bei Fehlern ---
 async def send_screenshot(page, fehlertext="Fehler"):
     channel = bot.get_channel(CHANNEL_ID)
     if channel:
@@ -47,7 +46,7 @@ async def send_screenshot(page, fehlertext="Fehler"):
             file=discord.File(fp=buffer, filename="screenshot.png")
         )
 
-# --- Scraping ---
+# --- Haupt-Scraping ---
 async def scrape_stoerungen():
     global last_stoerungen
     print(f"[{datetime.now()}] 🔁 scrape_stoerungen gestartet")
@@ -61,9 +60,9 @@ async def scrape_stoerungen():
             await page.wait_for_load_state("networkidle")
             await asyncio.sleep(2)
 
-            # Dialog schließen
+            # Info schließen
             try:
-                close_btn = await page.query_selector("div[class*=MuiDialog] button[aria-label='Close']") 
+                close_btn = await page.query_selector("div[class*=MuiDialog] button[aria-label='Close']")
                 if close_btn:
                     await close_btn.click()
                     await asyncio.sleep(1)
@@ -88,7 +87,7 @@ async def scrape_stoerungen():
             await page.click("text=Einschränkungen")
             await asyncio.sleep(2)
 
-            # Sortieren nach "Gültigkeit von" → zweimal klicken
+            # 👉 Sortieren nach "Gültigkeit von" (zweimal klicken für neueste zuerst)
             try:
                 sort_button = await page.wait_for_selector('th:has-text("Gültigkeit von")', timeout=5000)
                 await sort_button.click()
@@ -103,6 +102,7 @@ async def scrape_stoerungen():
             rows = await page.query_selector_all("table tbody tr")
 
             new_stoerungen = []
+
             for row in rows:
                 columns = await row.query_selector_all("td")
                 if len(columns) < 8:
@@ -140,7 +140,7 @@ async def scrape_stoerungen():
         print(f"❌ Fehler beim Scraping: {e}")
         return []
 
-# --- Prüfschleife ---
+# --- Prüfen und an Discord senden ---
 async def check_stoerungen():
     global last_stoerungen, last_check_time
     await bot.wait_until_ready()
@@ -155,9 +155,9 @@ async def check_stoerungen():
                 last_stoerungen.add(s["id"])
                 await channel.send(s["text"])
 
-        await asyncio.sleep(600)
+        await asyncio.sleep(600)  # alle 10 Minuten prüfen
 
-# --- Statusbefehl ---
+# --- Status-Befehl ---
 @bot.command()
 async def status(ctx):
     if ADMIN_ID and str(ctx.author.id) != str(ADMIN_ID):
@@ -173,12 +173,12 @@ async def on_ready():
     print(f"✅ Bot gestartet als {bot.user}")
     bot.loop.create_task(check_stoerungen())
 
-# --- Main ---
+# --- Start ---
 async def main():
-    # Erst Healthserver starten (Render erwartet Port)
-    await start_web_server()
-    # Danach Bot starten
-    await bot.start(DISCORD_TOKEN)
+    await asyncio.gather(
+        start_web_server(),       # Health-Server starten
+        bot.start(DISCORD_TOKEN)  # Discord-Bot starten
+    )
 
 if __name__ == "__main__":
     try:
