@@ -4,19 +4,13 @@ from datetime import datetime
 from discord.ext import commands
 import discord
 from aiohttp import web
-from playwright.async_api import async_playwright, Error as PlaywrightError
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from io import BytesIO
 
-# -------------------------
-# Konfiguration / Umgebungsvariablen
-# -------------------------
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 ADMIN_ID = os.getenv("ADMIN_ID")
 
-# -------------------------
-# Discord Bot Setup
-# -------------------------
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -24,9 +18,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 last_stoerungen = set()
 last_check_time = None
 
-# -------------------------
-# Healthcheck-Webserver (für Render)
-# -------------------------
+# --- Healthcheck ---
 async def handle_health(request):
     return web.Response(text="OK")
 
@@ -41,361 +33,211 @@ async def start_web_server():
     await site.start()
     print(f"🌐 Health-Webserver läuft auf Port {port}")
 
-# -------------------------
-# Hilfsfunktionen: Screenshot senden
-# -------------------------
+# --- Screenshot senden ---
 async def send_screenshot(page, fehlertext="Fehler"):
-    try:
-        channel = bot.get_channel(CHANNEL_ID)
-        if channel:
-            screenshot_bytes = await page.screenshot(type="png", full_page=False)
-            buffer = BytesIO(screenshot_bytes)
-            buffer.name = "screenshot.png"
-            buffer.seek(0)
-            await channel.send(
-                content=f"❌ **Fehler beim Scraping:** {fehlertext}",
-                file=discord.File(fp=buffer, filename="screenshot.png")
-            )
-    except Exception as e:
-        print("⚠️ Fehler beim Screenshot-Senden:", e)
+    channel = bot.get_channel(CHANNEL_ID)
+    if channel:
+        screenshot_bytes = await page.screenshot(type="png")
+        buffer = BytesIO(screenshot_bytes)
+        buffer.name = "screenshot.png"
+        buffer.seek(0)
+        await channel.send(
+            content=f"❌ **Fehler beim Scraping:** {fehlertext}",
+            file=discord.File(fp=buffer, filename="screenshot.png")
+        )
 
-# -------------------------
-# Robustes Schließen von Overlays/Popups (mehrere Strategien)
-# -------------------------
+# --- Overlays schließen ---
 async def close_overlays(page, max_wait_seconds: float = 8.0):
-    """
-    Versucht in einer kurzen Schleife alle störenden Overlays (Cookie, Analyse, Info-Dialoge)
-    zu schließen. Lässt sich mehrfach wiederholen.
-    """
     start = datetime.now().timestamp()
     while datetime.now().timestamp() - start < max_wait_seconds:
         closed_any = False
 
-        # Varianten: "Ablehnen", "Alle akzeptieren", "Alles akzeptieren"
+        # 1) Usercentrics Cookie-Banner
         try:
-            btn = await page.query_selector("button:has-text('Ablehnen')")
-            if btn:
-                await btn.click()
-                await asyncio.sleep(0.6)
-                print("✅ Overlay: 'Ablehnen' geklickt")
-                closed_any = True
+            uc_banner = await page.query_selector("#usercentrics-cmp-ui")
+            if uc_banner:
+                print("🔍 Usercentrics-Overlay erkannt – versuche zu schließen...")
+                btn_decline = await page.query_selector("button:has-text('Ablehnen')")
+                btn_accept = await page.query_selector("button:has-text('Alle akzeptieren')")
+                if btn_decline:
+                    await btn_decline.click(force=True)
+                    closed_any = True
+                    print("✅ Usercentrics: 'Ablehnen' geklickt")
+                elif btn_accept:
+                    await btn_accept.click(force=True)
+                    closed_any = True
+                    print("✅ Usercentrics: 'Alle akzeptieren' geklickt")
+                await asyncio.sleep(1)
         except Exception:
             pass
 
-        try:
-            btn = await page.query_selector("button:has-text('Alle akzeptieren')")
-            if btn:
-                await btn.click()
-                await asyncio.sleep(0.6)
-                print("✅ Overlay: 'Alle akzeptieren' geklickt")
-                closed_any = True
-        except Exception:
-            pass
+        # 2) Allgemeine Cookie-Buttons
+        for text in ["Ablehnen", "Alle akzeptieren", "Alles akzeptieren"]:
+            try:
+                btn = await page.query_selector(f"button:has-text('{text}')")
+                if btn:
+                    await btn.click(force=True)
+                    await asyncio.sleep(0.6)
+                    print(f"✅ Overlay: '{text}' geklickt")
+                    closed_any = True
+            except Exception:
+                pass
 
-        try:
-            btn = await page.query_selector("button:has-text('Alles akzeptieren')")
-            if btn:
-                await btn.click()
-                await asyncio.sleep(0.6)
-                print("✅ Overlay: 'Alles akzeptieren' geklickt")
-                closed_any = True
-        except Exception:
-            pass
-
-        # Blaues Info-Dialog (role=dialog) - Suche nach Close-Button
+        # 3) Info-Dialoge
         try:
             dlg_close = await page.query_selector("div[role='dialog'] button[aria-label='Close']")
             if dlg_close:
-                await dlg_close.click()
+                await dlg_close.click(force=True)
                 await asyncio.sleep(0.6)
-                print("✅ Info-Dialog geschlossen (aria-label='Close')")
+                print("✅ Info-Dialog geschlossen")
                 closed_any = True
         except Exception:
             pass
 
-        # Alternative: generischer dialog-close
         try:
             dlg_close2 = await page.query_selector("div[role='dialog'] button:has-text('Schließen')")
             if dlg_close2:
-                await dlg_close2.click()
+                await dlg_close2.click(force=True)
                 await asyncio.sleep(0.6)
-                print("✅ Info-Dialog geschlossen (button 'Schließen')")
+                print("✅ Info-Dialog (Schließen) geschlossen")
                 closed_any = True
         except Exception:
             pass
 
-        # MUI-Dialog spezifisch (DB Seite verwendet oft MUI)
-        try:
-            mui_btn = await page.query_selector("div[class*=MuiDialog] button")
-            if mui_btn:
-                # try to click only if visible
-                await mui_btn.click()
-                await asyncio.sleep(0.6)
-                print("✅ MUI-Dialog-Button geklickt")
-                closed_any = True
-        except Exception:
-            pass
-
-        # Wenn nichts geschlossen wurde, beenden
         if not closed_any:
             break
 
-    # kleine Pause am Ende
-    await asyncio.sleep(0.2)
+    await asyncio.sleep(0.3)
 
-# -------------------------
-# Scraping Funktion (Hauptlogik)
-# -------------------------
+# --- Haupt-Scraping ---
 async def scrape_stoerungen():
     global last_stoerungen
     print(f"[{datetime.now()}] 🔁 scrape_stoerungen gestartet")
 
     try:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True,
-                                              args=["--no-sandbox", "--disable-dev-shm-usage"])
-            context = await browser.new_context(viewport={"width": 1366, "height": 900})
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context()
             page = await context.new_page()
-
-            # user agent kann helfen falls website special casing macht
-            await page.set_extra_http_headers({"Accept-Language": "de-DE,de;q=0.9,en;q=0.8"})
-
-            # 1) Seite öffnen
             await page.goto("https://strecken-info.de/", timeout=60000)
             await page.wait_for_load_state("networkidle")
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
 
-            # 2) Popups schließen (robust)
-            await close_overlays(page, max_wait_seconds=6)
+            # Overlays direkt schließen
+            await close_overlays(page)
 
-            # 3) Filter öffnen: mehrere Selektoren als Fallback
-            filter_button = None
-            filter_selectors = [
-                "button[aria-label='Filter öffnen']",
-                "button[aria-label='Filter']",
-                "button:has-text('Filter')",
-                "text=Filter"
-            ]
-            for sel in filter_selectors:
-                try:
-                    elem = await page.query_selector(sel)
-                    if elem:
-                        filter_button = elem
-                        break
-                except Exception:
-                    pass
-
-            if not filter_button:
-                # Letzte Chance: warte kurz, schließe overlays und versuche wieder
-                await close_overlays(page, max_wait_seconds=3)
-                for sel in filter_selectors:
-                    try:
-                        elem = await page.query_selector(sel)
-                        if elem:
-                            filter_button = elem
-                            break
-                    except Exception:
-                        pass
-
-            if not filter_button:
-                await send_screenshot(page, "Filter-Panel konnte nicht geöffnet werden: Button nicht gefunden")
-                print("❌ Filter-Button nicht gefunden - Abbruch")
-                await context.close()
-                await browser.close()
-                return []
-
+            # Filter öffnen
             try:
-                await filter_button.scroll_into_view_if_needed()
-                await filter_button.click()
-                await asyncio.sleep(1.2)
-                print("✅ Filter-Panel geöffnet")
+                filter_button = await page.wait_for_selector("button[aria-label='Filter öffnen']", timeout=10000)
+                try:
+                    await filter_button.click()
+                except PlaywrightTimeoutError:
+                    print("⚠️ Filter-Button Klick blockiert – versuche force=True")
+                    await filter_button.click(force=True)
+                await asyncio.sleep(2)
+                print("✅ Filter geöffnet")
             except Exception as e:
-                await send_screenshot(page, f"Fehler beim Klick auf Filter-Button: {e}")
-                print("❌ Fehler beim Klick auf Filter-Button:", e)
-                await context.close()
-                await browser.close()
+                await send_screenshot(page, f"Filter-Panel konnte nicht geöffnet werden: {e}")
                 return []
 
-            # erneut Popups schließen (falls eines nach Filter-Öffnung erscheint)
-            await close_overlays(page, max_wait_seconds=4)
+            await close_overlays(page)
 
-            # 4) Baustellen & Streckenruhen deaktivieren; Störungen aktiv lassen
+            # Baustellen & Streckenruhen deaktivieren
             for label_text in ["Baustellen", "Streckenruhen"]:
                 try:
                     label = await page.query_selector(f"label:has-text('{label_text}')")
                     if label:
-                        cb = await label.query_selector("input[type='checkbox']")
-                        if cb:
-                            try:
-                                checked = await cb.is_checked()
-                            except Exception:
-                                checked = False
-                            if checked:
-                                await cb.click()
-                                await asyncio.sleep(0.6)
-                                print(f"✅ '{label_text}' deaktiviert")
-                            else:
-                                print(f"ℹ️ '{label_text}' war bereits deaktiviert")
+                        checkbox = await label.query_selector("input[type='checkbox']")
+                        if checkbox and await checkbox.is_checked():
+                            await checkbox.click()
+                            await asyncio.sleep(0.5)
+                            print(f"✅ {label_text} deaktiviert")
                 except Exception as e:
-                    print(f"⚠️ Fehler beim Deaktivieren von {label_text}: {e}")
+                    print(f"⚠️ Konnte {label_text} nicht deaktivieren: {e}")
 
-            # optional: stelle sicher dass "Störungen" angehakt ist (wenn vorhanden)
+            # Einschränkungen aktivieren
             try:
-                stoer_label = await page.query_selector("label:has-text('Störungen')")
-                if stoer_label:
-                    cb = await stoer_label.query_selector("input[type='checkbox']")
-                    if cb:
-                        try:
-                            checked = await cb.is_checked()
-                        except Exception:
-                            checked = False
-                        if not checked:
-                            await cb.click()
-                            await asyncio.sleep(0.6)
-                            print("✅ 'Störungen' aktiviert")
-            except Exception:
-                pass
-
-            # 5) Einschränkungen-Tab klicken (falls vorhanden)
-            try:
-                # mehrere Varianten: button text oder nav item
-                tab_selectors = ["text=Einschränkungen", "button:has-text('Einschränkungen')", "a:has-text('Einschränkungen')"]
-                clicked_tab = False
-                for ts in tab_selectors:
-                    try:
-                        elem = await page.query_selector(ts)
-                        if elem:
-                            await elem.click()
-                            await asyncio.sleep(0.8)
-                            clicked_tab = True
-                            print("✅ 'Einschränkungen' Tab geöffnet")
-                            break
-                    except Exception:
-                        pass
-                if not clicked_tab:
-                    # evtl ist die Tabelle schon sichtbar ohne Tab-Klick
-                    print("ℹ️ 'Einschränkungen' Tab nicht gefunden (vielleicht schon aktiv)")
+                await page.click("text=Einschränkungen")
+                await asyncio.sleep(2)
+                print("✅ Einschränkungen aktiviert")
             except Exception as e:
-                print("⚠️ Fehler beim Öffnen von 'Einschränkungen':", e)
-
-            # nochmal Overlays schließen
-            await close_overlays(page, max_wait_seconds=3)
-
-            # 6) Sortierung: "Gültigkeit von" doppelklick (neueste zuerst)
-            try:
-                # Warte kurz, dann click twice
-                sort_selector = 'th:has-text("Gültigkeit von")'
-                sort_elem = await page.wait_for_selector(sort_selector, timeout=7000)
-                await sort_elem.click()
-                await asyncio.sleep(0.4)
-                await sort_elem.click()
-                await asyncio.sleep(0.6)
-                print("✅ Sortierung: 'Gültigkeit von' zweimal geklickt")
-            except Exception as e:
-                await send_screenshot(page, f"Sortierung fehlgeschlagen: {e}")
-                print("⚠️ Sortierung fehlgeschlagen:", e)
-                # wir brechen nicht komplett ab hier, sondern versuchen trotzdem die Tabelle zu lesen
-
-            # 7) Tabelle warten & Zeilen auslesen
-            try:
-                await page.wait_for_selector("table tbody tr", timeout=15000)
-                rows = await page.query_selector_all("table tbody tr")
-                print(f"🔍 Gefundene Tabellenzeilen: {len(rows)}")
-            except Exception as e:
-                await send_screenshot(page, f"Tabelle nicht gefunden: {e}")
-                print("❌ Tabelle nicht gefunden:", e)
-                await context.close()
-                await browser.close()
+                await send_screenshot(page, f"Einschränkungen konnten nicht aktiviert werden: {e}")
                 return []
 
-            # 8) Auslesen der Tabellenzeilen
+            await close_overlays(page)
+
+            # Sortieren nach "Gültigkeit von"
+            try:
+                sort_button = await page.wait_for_selector('th:has-text("Gültigkeit von")', timeout=5000)
+                await sort_button.click()
+                await asyncio.sleep(0.5)
+                await sort_button.click()
+                await asyncio.sleep(1)
+                print("✅ Tabelle sortiert")
+            except Exception as e:
+                await send_screenshot(page, f"Sortierung fehlgeschlagen: {e}")
+                return []
+
+            # Tabelle laden
+            await page.wait_for_selector("table tbody tr", timeout=15000)
+            rows = await page.query_selector_all("table tbody tr")
+
             new_stoerungen = []
             for row in rows:
-                try:
-                    cols = await row.query_selector_all("td")
-                    if len(cols) < 8:
-                        continue
-
-                    id_text = (await cols[0].inner_text()).strip()
-                    typ = (await cols[1].inner_text()).strip()
-                    ort = (await cols[2].inner_text()).strip()
-                    region = (await cols[3].inner_text()).strip()
-                    wirkung = (await cols[4].inner_text()).strip()
-                    ursache = (await cols[5].inner_text()).strip()
-                    gueltig_von = (await cols[6].inner_text()).strip()
-                    gueltig_bis = (await cols[7].inner_text()).strip()
-
-                    if typ.lower() in ["baustelle", "streckenruhe"]:
-                        continue
-
-                    if id_text not in last_stoerungen:
-                        message = (
-                            "🚨 **Neue Bahn-Störung entdeckt!**\n\n"
-                            f"🆔 **ID:** {id_text}\n"
-                            f"📌 **Typ:** {typ}\n"
-                            f"📍 **Ort:** {ort}\n"
-                            f"🗺️ **Region:** {region}\n"
-                            f"🚦 **Wirkung:** {wirkung}\n"
-                            f"📋 **Ursache:** {ursache}\n"
-                            f"⏰ **Gültigkeit:** {gueltig_von} → {gueltig_bis}"
-                        )
-                        new_stoerungen.append({"id": id_text, "text": message})
-                except Exception as e:
-                    print("⚠️ Fehler beim Auslesen einer Zeile:", e)
+                columns = await row.query_selector_all("td")
+                if len(columns) < 8:
                     continue
 
-            print(f"🔍 Neue Störungen erkannt: {len(new_stoerungen)}")
+                id_text = (await columns[0].inner_text()).strip()
+                typ = (await columns[1].inner_text()).strip()
+                ort = (await columns[2].inner_text()).strip()
+                region = (await columns[3].inner_text()).strip()
+                wirkung = (await columns[4].inner_text()).strip()
+                ursache = (await columns[5].inner_text()).strip()
+                gueltig_von = (await columns[6].inner_text()).strip()
+                gueltig_bis = (await columns[7].inner_text()).strip()
 
-            # cleanup browser context
-            await context.close()
-            await browser.close()
+                if typ.lower() in ["baustelle", "streckenruhe"]:
+                    continue
 
+                if id_text not in last_stoerungen:
+                    message = (
+                        "🚨 **Neue Bahn-Störung entdeckt!**\n\n"
+                        f"🆔 **ID:** {id_text}\n"
+                        f"📌 **Typ:** {typ}\n"
+                        f"📍 **Ort:** {ort}\n"
+                        f"🗺️ **Region:** {region}\n"
+                        f"🚦 **Wirkung:** {wirkung}\n"
+                        f"📋 **Ursache:** {ursache}\n"
+                        f"⏰ **Gültigkeit:** {gueltig_von} → {gueltig_bis}"
+                    )
+                    new_stoerungen.append({"id": id_text, "text": message})
+
+            print(f"🔍 Neue Störungen: {len(new_stoerungen)}")
             return new_stoerungen
 
-    except PlaywrightError as e:
-        print("❌ Playwright-Fehler beim Scraping:", e)
-        return []
     except Exception as e:
-        print("❌ Unerwarteter Fehler beim Scraping:", e)
+        print(f"❌ Fehler beim Scraping: {e}")
         return []
 
-# -------------------------
-# Prüf-Loop: Scrapen und an Discord senden
-# -------------------------
+# --- Check-Loop ---
 async def check_stoerungen():
     global last_stoerungen, last_check_time
     await bot.wait_until_ready()
     channel = bot.get_channel(CHANNEL_ID)
-    if channel:
-        await channel.send("✅ Bahn-Störungs-Bot wurde gestartet!")
 
     while not bot.is_closed():
         stoerungen = await scrape_stoerungen()
         last_check_time = datetime.now()
 
-        # Sende neue Störungen an Discord
-        if stoerungen:
-            channel = bot.get_channel(CHANNEL_ID)
-            for s in stoerungen:
-                if s["id"] not in last_stoerungen:
-                    last_stoerungen.add(s["id"])
-                    try:
-                        if channel:
-                            await channel.send(s["text"])
-                            print(f"✅ Gesendet: {s['id']}")
-                        else:
-                            print("⚠️ Channel nicht gefunden, kann Nachricht nicht senden")
-                    except Exception as e:
-                        print("❌ Fehler beim Senden an Discord:", e)
-        else:
-            print("ℹ️ Keine neuen Störungen in diesem Durchlauf")
+        for s in stoerungen:
+            if s["id"] not in last_stoerungen:
+                last_stoerungen.add(s["id"])
+                await channel.send(s["text"])
 
-        # Warte 10 Minuten
-        await asyncio.sleep(600)
+        await asyncio.sleep(600)  # alle 10 Minuten
 
-# -------------------------
-# Admin-Status-Command
-# -------------------------
+# --- Status-Befehl ---
 @bot.command()
 async def status(ctx):
     if ADMIN_ID and str(ctx.author.id) != str(ADMIN_ID):
@@ -408,13 +250,10 @@ async def status(ctx):
 
 @bot.event
 async def on_ready():
-    print(f"🤖 Bot ready as {bot.user}")
-    # starte Loop
+    print(f"✅ Bot gestartet als {bot.user}")
     bot.loop.create_task(check_stoerungen())
 
-# -------------------------
-# Main: Health-Webserver + Discord starten
-# -------------------------
+# --- Start ---
 async def main():
     await asyncio.gather(
         start_web_server(),
