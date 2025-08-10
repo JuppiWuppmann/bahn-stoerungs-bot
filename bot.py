@@ -49,7 +49,7 @@ async def send_screenshot(page, fehlertext="Fehler"):
 # --- Haupt-Scraping ---
 async def scrape_stoerungen():
     global last_stoerungen
-    print(f"\n[{datetime.now()}] 🔁 scrape_stoerungen gestartet")
+    print(f"[{datetime.now()}] 🔁 scrape_stoerungen gestartet")
 
     try:
         async with async_playwright() as p:
@@ -60,58 +60,79 @@ async def scrape_stoerungen():
             await page.wait_for_load_state("networkidle")
             await asyncio.sleep(2)
 
-            # Info schließen
+            # 1️⃣ Cookies oder Modale schließen
             try:
-                close_btn = await page.query_selector("div[class*=MuiDialog] button[aria-label='Close']")
-                if close_btn:
-                    await close_btn.click()
-                    await asyncio.sleep(1)
-                    print("ℹ️ Info-Dialog geschlossen.")
+                close_selectors = [
+                    "button:has-text('Akzeptieren')",
+                    "button[aria-label='Close']",
+                    "button:has-text('Schließen')"
+                ]
+                for sel in close_selectors:
+                    btn = await page.query_selector(sel)
+                    if btn:
+                        await btn.click()
+                        await asyncio.sleep(1)
             except:
-                print("ℹ️ Kein Info-Dialog gefunden.")
+                pass
 
-            # Filter öffnen
-            toggle_button = await page.query_selector("button[aria-label='Filter öffnen']")
-            if toggle_button:
+            # 2️⃣ Filter-Panel öffnen
+            try:
+                toggle_button = await page.wait_for_selector("button[aria-label='Filter öffnen']", timeout=5000)
                 await toggle_button.click()
-                await asyncio.sleep(2)
-                print("✅ Filter geöffnet.")
+                await asyncio.sleep(1)
+            except Exception as e:
+                await send_screenshot(page, f"Filter-Panel konnte nicht geöffnet werden: {e}")
+                return []
 
-            # Baustellen & Streckenruhen deaktivieren
+            # 3️⃣ Baustellen & Streckenruhen deaktivieren
             for label_text in ["Baustellen", "Streckenruhen"]:
-                label = await page.query_selector(f"label:has-text('{label_text}')")
-                if label:
-                    checkbox = await label.query_selector("input[type='checkbox']")
-                    if checkbox and await checkbox.is_checked():
-                        await checkbox.click()
-                        print(f"🚫 {label_text} deaktiviert.")
+                try:
+                    label = await page.query_selector(f"label:has-text('{label_text}')")
+                    if label:
+                        checkbox = await label.query_selector("input[type='checkbox']")
+                        if checkbox and await checkbox.is_checked():
+                            await checkbox.click()
+                            await asyncio.sleep(0.5)
+                except:
+                    pass
 
-            # Einschränkungen aktivieren
+            # 4️⃣ Einschränkungen aktivieren
             try:
-                await page.click("text=Einschränkungen")
-                await asyncio.sleep(2)
-                print("✅ Einschränkungen aktiviert.")
+                einschr = await page.query_selector("label:has-text('Einschränkungen')")
+                if einschr:
+                    checkbox = await einschr.query_selector("input[type='checkbox']")
+                    if checkbox and not await checkbox.is_checked():
+                        await checkbox.click()
+                        await asyncio.sleep(0.5)
             except:
-                print("⚠️ Einschränkungen-Button nicht gefunden.")
+                pass
 
-            # Sortieren
+            # 5️⃣ Filter-Panel schließen (optional)
+            try:
+                close_filter = await page.query_selector("button[aria-label='Filter schließen']")
+                if close_filter:
+                    await close_filter.click()
+                    await asyncio.sleep(1)
+            except:
+                pass
+
+            # 6️⃣ Sortieren nach "Gültigkeit von"
             try:
                 sort_button = await page.wait_for_selector('th:has-text("Gültigkeit von")', timeout=5000)
                 await sort_button.click()
                 await page.wait_for_timeout(500)
                 await sort_button.click()
                 await page.wait_for_timeout(1000)
-                print("✅ Tabelle nach 'Gültigkeit von' sortiert.")
             except Exception as e:
-                print(f"⚠️ Sortierung fehlgeschlagen: {e}")
                 await send_screenshot(page, "Sortierung fehlgeschlagen")
+                print("⚠️ Sortierung fehlgeschlagen:", e)
+                return []
 
-            # Tabelle laden
+            # 7️⃣ Tabelle auslesen
             await page.wait_for_selector("table tbody tr", timeout=15000)
             rows = await page.query_selector_all("table tbody tr")
-            print(f"📊 Gefundene Tabellenzeilen: {len(rows)}")
-
             new_stoerungen = []
+
             for row in rows:
                 columns = await row.query_selector_all("td")
                 if len(columns) < 8:
@@ -125,8 +146,6 @@ async def scrape_stoerungen():
                 ursache = (await columns[5].inner_text()).strip()
                 gueltig_von = (await columns[6].inner_text()).strip()
                 gueltig_bis = (await columns[7].inner_text()).strip()
-
-                print(f"➡️ ID={id_text}, Typ={typ}, Ort={ort}")
 
                 if typ.lower() in ["baustelle", "streckenruhe"]:
                     continue
@@ -144,12 +163,14 @@ async def scrape_stoerungen():
                     )
                     new_stoerungen.append({"id": id_text, "text": message})
 
-            print(f"🔍 Neue Störungen gefunden: {len(new_stoerungen)}")
+            print(f"🔍 Neue Störungen: {len(new_stoerungen)}")
             return new_stoerungen
 
     except Exception as e:
+        await send_screenshot(page, f"Allgemeiner Fehler: {e}")
         print(f"❌ Fehler beim Scraping: {e}")
         return []
+
 
 # --- Prüfen und an Discord senden ---
 async def check_stoerungen():
