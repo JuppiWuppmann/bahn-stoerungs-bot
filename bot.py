@@ -147,10 +147,23 @@ async def scrape_stoerungen():
             await page.wait_for_load_state("networkidle")
             await asyncio.sleep(2)
 
-            # Filter öffnen
-            if not await safe_click(page, "button[aria-label='Filter öffnen']", description="Filter öffnen"):
-                if not await safe_click(page, "button:has-text('Filter')", description="Filter öffnen (Alternative)"):
-                    return []
+            # Filter öffnen (robust)
+            try:
+                await ensure_no_overlays(page)  # nochmal Overlay-Check direkt davor
+                toggle_button = await page.query_selector("button[aria-label='Filter öffnen']")
+                if not toggle_button:
+                    toggle_button = await page.query_selector("button:has-text('Filter')")
+                if toggle_button:
+                    await ensure_no_overlays(page)  # sicherstellen, dass nichts blockiert
+                    await toggle_button.click(timeout=10000)
+                    await asyncio.sleep(2)
+                    print("✅ Filter geöffnet")
+                else:
+                    raise Exception("Filter-Button nicht gefunden")
+            except Exception as e:
+                await send_screenshot(page, f"Filter-Panel konnte nicht geöffnet werden: {e}")
+                return []
+
 
             # Baustellen & Streckenruhen ausschalten
             for label_text in ["Baustellen", "Streckenruhen"]:
