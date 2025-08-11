@@ -48,19 +48,22 @@ async def send_screenshot(page, fehlertext="Fehler"):
 
 # --- Overlays schließen ---
 async def close_overlays(page):
-    # 1️⃣ Analyse-/Cookie-Banner
+    # 1️⃣ Cookie-/Analyse-Banner schließen
     try:
-        ablehnen_btn = await page.query_selector("button:has-text('Ablehnen')")
-        if ablehnen_btn:
-            await ablehnen_btn.click()
+        for _ in range(5):
+            ablehnen_btn = await page.query_selector("button:has-text('Ablehnen')")
+            if ablehnen_btn:
+                await ablehnen_btn.click()
+                await asyncio.sleep(1)
+                print("✅ Cookie-/Analyse-Banner abgelehnt")
+                break
             await asyncio.sleep(1)
-            print("✅ Analyse-/Cookie-Banner abgelehnt")
     except Exception as e:
-        print(f"ℹ️ Kein Analyse-/Cookie-Banner: {e}")
+        print(f"ℹ️ Kein Cookie-/Analyse-Banner gefunden: {e}")
 
     # 2️⃣ Blaues Info-Overlay schließen
     try:
-        for _ in range(5):  # bis zu 5 Versuche, falls langsam lädt
+        for _ in range(5):
             info_close = await page.query_selector("div[role='dialog'] button[aria-label='Schließen']")
             if info_close:
                 await info_close.click()
@@ -69,7 +72,7 @@ async def close_overlays(page):
                 break
             await asyncio.sleep(1)
     except Exception as e:
-        print(f"ℹ️ Kein Info-Overlay: {e}")
+        print(f"ℹ️ Kein Info-Overlay gefunden: {e}")
 
 # --- Haupt-Scraping ---
 async def scrape_stoerungen():
