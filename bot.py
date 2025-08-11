@@ -52,56 +52,41 @@ async def send_screenshot(page, fehlertext="Fehler"):
 # --- Overlays schließen ---
 async def ensure_no_overlays(page, max_wait=15000):
     """
-    Schließt alle störenden Overlays (Usercentrics + Info-Overlay),
-    wiederholt bis keine mehr erscheinen oder max_wait erreicht ist.
+    Entfernt alle störenden Overlays (Cookie-Banner, Info-Overlay, etc.)
     """
     start_time = datetime.now()
 
     while True:
         closed_any = False
 
-        # 1️⃣ Usercentrics "Analyse" Dialog
+        # Cookie-/Analyse-Banner
         try:
-            selector_variants = [
-                "button:has-text('Ablehnen')",
-                "div[role='dialog'] button:has-text('Ablehnen')",
-                "aside button:has-text('Ablehnen')"
-            ]
-            for sel in selector_variants:
-                btn = await page.query_selector(sel)
-                if btn:
-                    await btn.click()
-                    await asyncio.sleep(1)
-                    print("✅ Analyse-Banner (Usercentrics) abgelehnt")
-                    closed_any = True
-                    break
-        except Exception as e:
-            print(f"ℹ️ Kein Usercentrics-Banner gefunden: {e}")
-
-        # 2️⃣ Blaues Info-Overlay „Neue Features“
-        try:
-            info_overlay = await page.query_selector("div[role='dialog'] button[aria-label='Schließen']")
-            if info_overlay:
-                await info_overlay.click()
-                await asyncio.sleep(1)
-                print("✅ Info-Overlay geschlossen")
+            ablehnen_btn = await page.query_selector("button:has-text('Ablehnen')")
+            if ablehnen_btn:
+                await ablehnen_btn.click()
+                await asyncio.sleep(0.8)
+                print("✅ Cookie-/Analyse-Banner abgelehnt")
                 closed_any = True
-            else:
-                # Falls kein Button vorhanden → per ESC versuchen
-                blue_overlay = await page.query_selector("div[role='dialog']")
-                if blue_overlay:
-                    await page.keyboard.press("Escape")
-                    await asyncio.sleep(1)
-                    print("✅ Info-Overlay per Escape geschlossen")
-                    closed_any = True
-        except Exception as e:
-            print(f"ℹ️ Kein Info-Overlay gefunden: {e}")
+        except:
+            pass
 
-        # Abbruch, wenn keine Overlays mehr oder Zeit überschritten
-        elapsed = (datetime.now() - start_time).total_seconds() * 1000
-        if not closed_any or elapsed > max_wait:
-            if elapsed > max_wait:
-                print("⚠️ Overlay-Entfernung abgebrochen (Zeitlimit erreicht)")
+        # Alle "Schließen"-Buttons suchen (blauer Kasten, Popups, etc.)
+        try:
+            close_buttons = await page.query_selector_all("button[aria-label='Schließen']")
+            for btn in close_buttons:
+                await btn.click()
+                await asyncio.sleep(0.8)
+                print("✅ Overlay geschlossen")
+                closed_any = True
+        except:
+            pass
+
+        # Timeout prüfen
+        if (datetime.now() - start_time).total_seconds() * 1000 > max_wait:
+            print("⚠️ Overlay-Entfernung abgebrochen (Zeitlimit erreicht)")
+            break
+
+        if not closed_any:
             break
 
 
@@ -115,41 +100,33 @@ async def scrape_stoerungen():
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context()
             page = await context.new_page()
+            await page.goto("https://strecken-info.de/", timeout=60000)
+            await page.wait_for_load_state("networkidle")
+            await asyncio.sleep(2)
 
-            reload_attempts = 0
-            while reload_attempts < 2:
-                await page.goto("https://strecken-info.de/", timeout=60000)
-                await page.wait_for_load_state("networkidle")
-                await asyncio.sleep(2)
+            # Overlays schließen
+            await ensure_no_overlays(page)
 
-                await ensure_no_overlays(page)
-
-                # Filter öffnen
-                filter_opened = False
+            # Filter öffnen mit Fallback
+            try:
                 for attempt in range(3):
                     await ensure_no_overlays(page)
                     try:
-                        toggle_button = await page.wait_for_selector(
-                            "button[aria-label='Filter öffnen']",
-                            timeout=5000
-                        )
-                        await toggle_button.click()
+                        toggle_button = await page.query_selector("button[aria-label='Filter öffnen']")
+                        if not toggle_button:
+                            toggle_button = await page.query_selector("button:has-text('Filter')")
+                        if toggle_button:
+                            await toggle_button.click()
+                            await asyncio.sleep(2)
+                            print("✅ Filter geöffnet")
+                            break
+                    except Exception as e:
+                        print(f"⚠️ Versuch {attempt+1}: Filter-Button nicht gefunden, erneut versuchen... ({e})")
                         await asyncio.sleep(2)
-                        print("✅ Filter geöffnet")
-                        filter_opened = True
-                        break
-                    except Exception:
-                        print(f"⚠️ Versuch {attempt+1}: Filter-Button nicht gefunden...")
-                        await asyncio.sleep(2)
-
-                if filter_opened:
-                    break
                 else:
-                    print("🔄 Seite neu laden und erneut versuchen...")
-                    reload_attempts += 1
-
-            if not filter_opened:
-                await send_screenshot(page, "Filter-Panel konnte nicht geöffnet werden: Filter-Button nach 3 Versuchen nicht erreichbar")
+                    raise Exception("Filter-Button nach 3 Versuchen nicht erreichbar")
+            except Exception as e:
+                await send_screenshot(page, f"Filter-Panel konnte nicht geöffnet werden: {e}")
                 return []
 
             # Baustellen & Streckenruhen ausschalten
@@ -176,7 +153,7 @@ async def scrape_stoerungen():
 
             await ensure_no_overlays(page)
 
-            # Sortieren nach "Gültigkeit von"
+            # Tabelle sortieren
             try:
                 sort_button = await page.wait_for_selector('th:has-text("Gültigkeit von")', timeout=5000)
                 await sort_button.click()
@@ -279,4 +256,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("🛑 Bot wurde beendet.")
-
