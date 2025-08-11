@@ -47,26 +47,34 @@ async def send_screenshot(page, fehlertext="Fehler"):
         )
 
 # --- Overlays schließen ---
-async def close_overlays(page):
-    # 1️⃣ Cookie-/Analyse-Banner schließen
-    try:
-        print("⏳ Warte auf Cookie-/Analyse-Banner...")
-        await page.wait_for_selector("button:has-text('Ablehnen')", timeout=5000)
-        await page.click("button:has-text('Ablehnen')")
-        print("✅ Cookie-/Analyse-Banner abgelehnt")
-        await asyncio.sleep(1)
-    except:
-        print("ℹ️ Kein Cookie-/Analyse-Banner gefunden")
+async def ensure_no_overlays(page):
+    """Schließt alle bekannten Overlays, mehrfach wiederholt."""
+    for _ in range(6):  # bis zu 6 Versuche
+        found = False
 
-    # 2️⃣ Blaues Info-Overlay schließen
-    try:
-        print("⏳ Warte auf Info-Overlay...")
-        await page.wait_for_selector("div[role='dialog'] button[aria-label='Schließen']", timeout=5000)
-        await page.click("div[role='dialog'] button[aria-label='Schließen']")
-        print("✅ Blaues Info-Overlay geschlossen")
+        # Cookie-/Analyse-Banner
+        try:
+            button = await page.query_selector("button:has-text('Ablehnen')")
+            if button:
+                await button.click()
+                print("✅ Cookie-/Analyse-Banner abgelehnt")
+                found = True
+        except:
+            pass
+
+        # Blaues Info-Overlay
+        try:
+            button = await page.query_selector("div[role='dialog'] button[aria-label='Schließen']")
+            if button:
+                await button.click()
+                print("✅ Info-Overlay geschlossen")
+                found = True
+        except:
+            pass
+
+        if not found:
+            break
         await asyncio.sleep(1)
-    except:
-        print("ℹ️ Kein Info-Overlay gefunden")
 
 # --- Haupt-Scraping ---
 async def scrape_stoerungen():
@@ -82,22 +90,30 @@ async def scrape_stoerungen():
             await page.wait_for_load_state("networkidle")
             await asyncio.sleep(2)
 
-            # Overlays schließen bevor wir weitermachen
-            await close_overlays(page)
+            # Overlays mehrfach schließen
+            await ensure_no_overlays(page)
 
-            # Filter öffnen
+            # Filter öffnen mit Retry
             try:
-                print("⏳ Warte auf Filter-Button...")
-                toggle_button = await page.wait_for_selector("button[aria-label='Filter öffnen']", timeout=10000)
-                await toggle_button.click()
-                print("✅ Filter geöffnet")
-                await asyncio.sleep(2)
+                for attempt in range(2):  # max 2 Versuche
+                    try:
+                        toggle_button = await page.wait_for_selector(
+                            "button[aria-label='Filter öffnen']", timeout=15000
+                        )
+                        await toggle_button.click()
+                        print("✅ Filter geöffnet")
+                        break
+                    except:
+                        print(f"⚠️ Filter öffnen fehlgeschlagen (Versuch {attempt+1}), retry...")
+                        await ensure_no_overlays(page)
+                else:
+                    raise Exception("Filter-Button nach 2 Versuchen nicht erreichbar")
             except Exception as e:
                 await send_screenshot(page, f"Filter-Panel konnte nicht geöffnet werden: {e}")
                 return []
 
-            # Falls nach Öffnen wieder Overlays auftauchen
-            await close_overlays(page)
+            # Nochmal Overlays checken
+            await ensure_no_overlays(page)
 
             # Baustellen & Streckenruhen ausschalten
             for label_text in ["Baustellen", "Streckenruhen"]:
@@ -121,10 +137,9 @@ async def scrape_stoerungen():
                 await send_screenshot(page, f"Einschränkungen konnten nicht aktiviert werden: {e}")
                 return []
 
-            # Nochmal alles schließen vor dem Sortieren
-            await close_overlays(page)
+            await ensure_no_overlays(page)
 
-            # Sortieren nach "Gültigkeit von"
+            # Sortieren
             try:
                 sort_button = await page.wait_for_selector('th:has-text("Gültigkeit von")', timeout=5000)
                 await sort_button.click()
@@ -136,7 +151,7 @@ async def scrape_stoerungen():
                 await send_screenshot(page, f"Sortierung fehlgeschlagen: {e}")
                 return []
 
-            # Tabelle laden
+            # Tabelle auslesen
             await page.wait_for_selector("table tbody tr", timeout=15000)
             rows = await page.query_selector_all("table tbody tr")
 
@@ -223,3 +238,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("🛑 Bot wurde beendet.")
+
