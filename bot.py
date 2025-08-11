@@ -47,44 +47,78 @@ async def send_screenshot(page, fehlertext="Fehler"):
         )
 
 # --- Overlays schließen ---
-async def ensure_no_overlays(page, max_wait=5000):
-    try:
-        start = datetime.now()
-        while (datetime.now() - start).total_seconds() * 1000 < max_wait:
-            closed_any = False
+async def ensure_no_overlays(page, max_wait=15000):
+    print("🔍 Starte Overlay-Entfernung...")
+    start_time = datetime.now()
 
-            # Usercentrics
+    while True:
+        closed_any = False
+
+        # 1️⃣ Usercentrics Overlay
+        try:
             uc_overlay = await page.query_selector("#usercentrics-cmp-ui")
             if uc_overlay:
-                print("⚠️ Usercentrics Overlay gefunden – wird entfernt...")
+                print("⚠️ Usercentrics Overlay gefunden!")
                 ablehnen_btn = await page.query_selector("button:has-text('Ablehnen')")
                 akzeptieren_btn = await page.query_selector("button:has-text('Alles akzeptieren')")
 
                 if ablehnen_btn:
                     await ablehnen_btn.click()
+                    await asyncio.sleep(1)
+                    print("✅ Usercentrics Overlay: 'Ablehnen' geklickt")
                     closed_any = True
                 elif akzeptieren_btn:
                     await akzeptieren_btn.click()
+                    await asyncio.sleep(1)
+                    print("✅ Usercentrics Overlay: 'Alles akzeptieren' geklickt")
                     closed_any = True
+        except Exception as e:
+            print(f"⚠️ Fehler bei Usercentrics-Check: {e}")
 
-            # Sonstige Cookie- oder Analyse-Banner
+        # 2️⃣ Cookie-/Analyse-Banner
+        try:
             ablehnen_btn = await page.query_selector("button:has-text('Ablehnen')")
             if ablehnen_btn:
                 await ablehnen_btn.click()
+                await asyncio.sleep(0.8)
+                print("✅ Cookie-/Analyse-Banner abgelehnt")
                 closed_any = True
+        except Exception as e:
+            print(f"⚠️ Kein Cookie-Banner gefunden: {e}")
 
-            # Allgemeine Schließen-Buttons
+        # 3️⃣ Allgemeine Schließen-Buttons
+        try:
             close_buttons = await page.query_selector_all("button[aria-label='Schließen']")
             for btn in close_buttons:
                 await btn.click()
+                await asyncio.sleep(0.8)
+                print("✅ Anderes Overlay geschlossen")
                 closed_any = True
+        except Exception as e:
+            print(f"⚠️ Keine allgemeinen Overlays gefunden: {e}")
 
-            if not closed_any:
-                break
-            else:
-                await asyncio.sleep(0.5)
-    except Exception as e:
-        print(f"⚠️ Overlay-Check Fehler: {e}")
+        # 4️⃣ Neues Feature Overlay
+        try:
+            info_overlay = await page.query_selector("div[role='dialog'], div:has-text('Neue Funktion'), div:has-text('Neues Feature')")
+            if info_overlay:
+                close_btn = await info_overlay.query_selector("button[aria-label='Schließen']")
+                if close_btn:
+                    await close_btn.click()
+                    await asyncio.sleep(0.8)
+                    print("✅ 'Neues Feature'-Overlay geschlossen")
+                    closed_any = True
+        except Exception as e:
+            print(f"⚠️ 'Neues Feature'-Overlay nicht gefunden: {e}")
+
+        # Zeitlimit prüfen
+        if (datetime.now() - start_time).total_seconds() * 1000 > max_wait:
+            print("⚠️ Overlay-Entfernung abgebrochen (Zeitlimit erreicht)")
+            break
+
+        if not closed_any:
+            print("ℹ️ Keine weiteren Overlays gefunden")
+            break
+
 
 # --- Sicherer Klick mit Overlay-Check ---
 async def safe_click(page, selector, timeout=5000, description="Element"):
