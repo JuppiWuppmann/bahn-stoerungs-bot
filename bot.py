@@ -54,6 +54,20 @@ async def ensure_no_overlays(page, max_wait=15000):
     while True:
         closed_any = False
 
+        # 0️⃣ "Züge teilen"-Popup schließen
+        try:
+            feature_popup = await page.query_selector("div:has-text('Neues Feature bei')")
+            if feature_popup:
+                print("⚠️ 'Züge teilen'-Popup gefunden!")
+                close_btn = await feature_popup.query_selector("button[aria-label='Schließen'], button[aria-label='Close']")
+                if close_btn:
+                    await close_btn.click()
+                    await asyncio.sleep(0.8)
+                    print("✅ 'Züge teilen'-Popup geschlossen")
+                    closed_any = True
+        except Exception as e:
+            print(f"⚠️ Fehler beim Schließen des 'Züge teilen'-Popups: {e}")
+
         # 1️⃣ Usercentrics Overlay
         try:
             uc_overlay = await page.query_selector("#usercentrics-cmp-ui")
@@ -119,7 +133,7 @@ async def scrape_stoerungen():
             await page.wait_for_load_state("networkidle")
             await asyncio.sleep(2)
 
-            # Overlays schließen
+            # Overlays schließen (inkl. "Züge teilen")
             await ensure_no_overlays(page)
 
             # Filter öffnen
@@ -162,6 +176,7 @@ async def scrape_stoerungen():
 
             # Tabelle sortieren
             try:
+                await ensure_no_overlays(page)  # Sicherheitshalber nochmal
                 sort_button = await page.wait_for_selector('th:has-text("Gültigkeit von")', timeout=5000)
                 await sort_button.click()
                 await asyncio.sleep(0.5)
