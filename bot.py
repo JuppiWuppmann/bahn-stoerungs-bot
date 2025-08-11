@@ -51,9 +51,6 @@ async def send_screenshot(page, fehlertext="Fehler"):
 
 # --- Overlays schließen ---
 async def ensure_no_overlays(page, max_wait=15000):
-    """
-    Entfernt alle störenden Overlays (Cookie-Banner, Info-Overlay, etc.)
-    """
     start_time = datetime.now()
 
     while True:
@@ -70,7 +67,7 @@ async def ensure_no_overlays(page, max_wait=15000):
         except:
             pass
 
-        # Alle "Schließen"-Buttons suchen (blauer Kasten, Popups, etc.)
+        # Alle "Schließen"-Buttons
         try:
             close_buttons = await page.query_selector_all("button[aria-label='Schließen']")
             for btn in close_buttons:
@@ -81,7 +78,6 @@ async def ensure_no_overlays(page, max_wait=15000):
         except:
             pass
 
-        # Timeout prüfen
         if (datetime.now() - start_time).total_seconds() * 1000 > max_wait:
             print("⚠️ Overlay-Entfernung abgebrochen (Zeitlimit erreicht)")
             break
@@ -107,83 +103,32 @@ async def scrape_stoerungen():
             # Overlays schließen
             await ensure_no_overlays(page)
 
-            # Filter öffnen mit Fallback
-            try:
-                for attempt in range(3):
-                    await ensure_no_overlays(page)
-                    try:
-                        toggle_button = await page.query_selector("button[aria-label='Filter öffnen']")
-                        if not toggle_button:
-                            toggle_button = await page.query_selector("button:has-text('Filter')")
-                        if toggle_button:
-                            await toggle_button.click()
-                            await asyncio.sleep(2)
-                            print("✅ Filter geöffnet")
-                            break
-                    except Exception as e:
-                        print(f"⚠️ Versuch {attempt+1}: Filter-Button nicht gefunden, erneut versuchen... ({e})")
-                        await asyncio.sleep(2)
-                else:
-                    raise Exception("Filter-Button nach 3 Versuchen nicht erreichbar")
-            except Exception as e:
-                await send_screenshot(page, f"Filter-Panel konnte nicht geöffnet werden: {e}")
-                return []
-
-            # Baustellen & Streckenruhen ausschalten
-            for label_text in ["Baustellen", "Streckenruhen"]:
-                try:
-                    label = await page.query_selector(f"label:has-text('{label_text}')")
-                    if label:
-                        checkbox = await label.query_selector("input[type='checkbox']")
-                        if checkbox and await checkbox.is_checked():
-                            await checkbox.click()
-                            await asyncio.sleep(0.5)
-                            print(f"✅ {label_text} deaktiviert")
-                except Exception as e:
-                    print(f"⚠️ Konnte {label_text} nicht deaktivieren: {e}")
-
-            # Einschränkungen aktivieren
-            try:
-                await page.click("text=Einschränkungen")
-                await asyncio.sleep(2)
-                print("✅ Einschränkungen aktiviert")
-            except Exception as e:
-                await send_screenshot(page, f"Einschränkungen konnten nicht aktiviert werden: {e}")
-                return []
-
-            await ensure_no_overlays(page)
-
-            # Tabelle sortieren
-            try:
-                sort_button = await page.wait_for_selector('th:has-text("Gültigkeit von")', timeout=5000)
-                await sort_button.click()
-                await asyncio.sleep(0.5)
-                await sort_button.click()
-                await asyncio.sleep(1)
-                print("✅ Tabelle sortiert")
-            except Exception as e:
-                await send_screenshot(page, f"Sortierung fehlgeschlagen: {e}")
-                return []
-
-            # Tabelle laden
+            # Tabelle warten
             await page.wait_for_selector("table tbody tr", timeout=15000)
-            rows = await page.query_selector_all("table tbody tr")
+            rows = page.locator("table tbody tr")
+            row_count = await rows.count()
+            print(f"Gefundene Zeilen: {row_count}")
 
             new_stoerungen = []
-            for row in rows:
-                columns = await row.query_selector_all("td")
-                if len(columns) < 8:
+            for i in range(row_count):
+                cells = rows.nth(i).locator("td")
+                cell_count = await cells.count()
+                cell_texts = [await cells.nth(j).inner_text() for j in range(cell_count)]
+                print(f"Zeile {i}: {cell_texts}")
+
+                if len(cell_texts) < 8:
                     continue
 
-                id_text = (await columns[0].inner_text()).strip()
-                typ = (await columns[1].inner_text()).strip()
-                ort = (await columns[2].inner_text()).strip()
-                region = (await columns[3].inner_text()).strip()
-                wirkung = (await columns[4].inner_text()).strip()
-                ursache = (await columns[5].inner_text()).strip()
-                gueltig_von = (await columns[6].inner_text()).strip()
-                gueltig_bis = (await columns[7].inner_text()).strip()
+                id_text = cell_texts[0].strip()
+                typ = cell_texts[1].strip()
+                ort = cell_texts[2].strip()
+                region = cell_texts[3].strip()
+                wirkung = cell_texts[4].strip()
+                ursache = cell_texts[5].strip()
+                gueltig_von = cell_texts[6].strip()
+                gueltig_bis = cell_texts[7].strip()
 
+                # Baustellen & Streckenruhen ignorieren
                 if typ.lower() in ["baustelle", "streckenruhe"]:
                     continue
 
