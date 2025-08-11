@@ -54,42 +54,37 @@ async def ensure_no_overlays(page, max_wait=15000):
     while True:
         closed_any = False
 
-        # 0️⃣ "Züge teilen"-Popup schließen
-        try:
-            feature_popup = await page.query_selector("div:has-text('Neues Feature bei')")
-            if feature_popup:
-                print("⚠️ 'Züge teilen'-Popup gefunden!")
-                close_btn = await feature_popup.query_selector("button[aria-label='Schließen'], button[aria-label='Close']")
-                if close_btn:
-                    await close_btn.click()
-                    await asyncio.sleep(0.8)
-                    print("✅ 'Züge teilen'-Popup geschlossen")
-                    closed_any = True
-        except Exception as e:
-            print(f"⚠️ Fehler beim Schließen des 'Züge teilen'-Popups: {e}")
-
-        # 1️⃣ Usercentrics Overlay
+        # 🔹 Usercentrics-Overlay inkl. Notfall-Remove
         try:
             uc_overlay = await page.query_selector("#usercentrics-cmp-ui")
             if uc_overlay:
-                print("⚠️ Usercentrics Overlay gefunden!")
+                print("⚠️ Usercentrics Overlay gefunden! Versuche zu schließen...")
                 ablehnen_btn = await page.query_selector("button:has-text('Ablehnen')")
                 akzeptieren_btn = await page.query_selector("button:has-text('Alles akzeptieren')")
 
                 if ablehnen_btn:
                     await ablehnen_btn.click()
                     await asyncio.sleep(1)
-                    print("✅ Usercentrics Overlay: 'Ablehnen' geklickt")
+                    print("✅ Usercentrics Overlay per Klick geschlossen")
                     closed_any = True
                 elif akzeptieren_btn:
                     await akzeptieren_btn.click()
                     await asyncio.sleep(1)
-                    print("✅ Usercentrics Overlay: 'Alles akzeptieren' geklickt")
+                    print("✅ Usercentrics Overlay per Klick geschlossen")
+                    closed_any = True
+                else:
+                    # Fallback: DOM-Element komplett entfernen
+                    await page.evaluate("""
+                        const el = document.querySelector('#usercentrics-cmp-ui');
+                        if (el) el.remove();
+                    """)
+                    await asyncio.sleep(0.5)
+                    print("🛠️ Usercentrics Overlay per JS entfernt")
                     closed_any = True
         except Exception as e:
             print(f"⚠️ Fehler bei Usercentrics-Check: {e}")
 
-        # 2️⃣ Cookie-/Analyse-Banner
+        # 🔹 Cookie-/Analyse-Banner
         try:
             ablehnen_btn = await page.query_selector("button:has-text('Ablehnen')")
             if ablehnen_btn:
@@ -97,10 +92,10 @@ async def ensure_no_overlays(page, max_wait=15000):
                 await asyncio.sleep(0.8)
                 print("✅ Cookie-/Analyse-Banner abgelehnt")
                 closed_any = True
-        except Exception as e:
-            print(f"⚠️ Kein Cookie-Banner gefunden: {e}")
+        except:
+            pass
 
-        # 3️⃣ Allgemeine Schließen-Buttons
+        # 🔹 Allgemeine Schließen-Buttons
         try:
             close_buttons = await page.query_selector_all("button[aria-label='Schließen']")
             for btn in close_buttons:
@@ -108,8 +103,8 @@ async def ensure_no_overlays(page, max_wait=15000):
                 await asyncio.sleep(0.8)
                 print("✅ Anderes Overlay geschlossen")
                 closed_any = True
-        except Exception as e:
-            print(f"⚠️ Keine allgemeinen Overlays gefunden: {e}")
+        except:
+            pass
 
         if (datetime.now() - start_time).total_seconds() * 1000 > max_wait:
             print("⚠️ Overlay-Entfernung abgebrochen (Zeitlimit erreicht)")
@@ -133,11 +128,12 @@ async def scrape_stoerungen():
             await page.wait_for_load_state("networkidle")
             await asyncio.sleep(2)
 
-            # Overlays schließen (inkl. "Züge teilen")
+            # Overlays schließen (direkt nach dem Laden!)
             await ensure_no_overlays(page)
 
             # Filter öffnen
             try:
+                await ensure_no_overlays(page)
                 toggle_button = await page.query_selector("button[aria-label='Filter öffnen']")
                 if not toggle_button:
                     toggle_button = await page.query_selector("button:has-text('Filter')")
@@ -176,7 +172,6 @@ async def scrape_stoerungen():
 
             # Tabelle sortieren
             try:
-                await ensure_no_overlays(page)  # Sicherheitshalber nochmal
                 sort_button = await page.wait_for_selector('th:has-text("Gültigkeit von")', timeout=5000)
                 await sort_button.click()
                 await asyncio.sleep(0.5)
