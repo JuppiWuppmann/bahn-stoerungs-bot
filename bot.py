@@ -56,17 +56,20 @@ async def close_overlays(page):
             await asyncio.sleep(1)
             print("✅ Analyse-/Cookie-Banner abgelehnt")
     except Exception as e:
-        print(f"ℹ️ Kein Analyse-/Cookie-Banner zu schließen: {e}")
+        print(f"ℹ️ Kein Analyse-/Cookie-Banner: {e}")
 
-    # 2️⃣ Info-Popup (blaues "Neue Funktion bei Züge online")
+    # 2️⃣ Blaues Info-Overlay schließen
     try:
-        info_close = await page.query_selector("div[role='dialog'] button[aria-label='Close']")
-        if info_close:
-            await info_close.click()
+        for _ in range(5):  # bis zu 5 Versuche, falls langsam lädt
+            info_close = await page.query_selector("div[role='dialog'] button[aria-label='Schließen']")
+            if info_close:
+                await info_close.click()
+                await asyncio.sleep(1)
+                print("✅ Blaues Info-Overlay geschlossen")
+                break
             await asyncio.sleep(1)
-            print("✅ Info-Overlay geschlossen")
     except Exception as e:
-        print(f"ℹ️ Kein Info-Overlay zu schließen: {e}")
+        print(f"ℹ️ Kein Info-Overlay: {e}")
 
 # --- Haupt-Scraping ---
 async def scrape_stoerungen():
