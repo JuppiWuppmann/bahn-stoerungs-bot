@@ -52,7 +52,7 @@ async def send_screenshot(page, fehlertext="Fehler"):
 # --- Alle Overlays schließen ---
 async def ensure_no_overlays(page, max_wait=15000):
     """
-    Schließt alle störenden Overlays (Cookie-Banner + Info-Overlay),
+    Schließt oder entfernt alle störenden Overlays (Cookie-Banner, Info-Overlays in beiden Varianten),
     wiederholt bis keine mehr erscheinen oder max_wait erreicht.
     """
     start_time = datetime.now()
@@ -63,27 +63,41 @@ async def ensure_no_overlays(page, max_wait=15000):
 
         # 1️⃣ Cookie-/Analyse-Banner
         try:
-            ablehnen_btn = await page.query_selector("button:has-text('Ablehnen')")
-            if ablehnen_btn:
+            ablehnen_btn = await page.query_selector("aside#usercentrics-cmp-ui button:has-text('Ablehnen')")
+            if ablehnen_btn and await ablehnen_btn.is_visible():
                 await ablehnen_btn.click()
                 await asyncio.sleep(1)
                 print("✅ Cookie-/Analyse-Banner abgelehnt")
                 closed_any = True
-        except Exception as e:
-            print(f"ℹ️ Kein Cookie-Banner gefunden: {e}")
+        except Exception:
+            pass
 
-        # 2️⃣ Blaues Info-Overlay
+        # 2️⃣ Blaues Overlay Variante 1: Dialog mit X-Button
         try:
             info_close = await page.query_selector("div[role='dialog'] button[aria-label='Schließen']")
-            if info_close:
+            if info_close and await info_close.is_visible():
                 await info_close.click()
                 await asyncio.sleep(1)
-                print("✅ Info-Overlay geschlossen")
+                print("✅ Blaues Dialog-Overlay geschlossen")
                 closed_any = True
-        except Exception as e:
-            print(f"ℹ️ Kein Info-Overlay gefunden: {e}")
+        except Exception:
+            pass
 
-        # Abbruch, wenn zu lange gewartet
+        # 3️⃣ Blaues Overlay Variante 2: Infoblock ohne Schließen-Button
+        try:
+            blue_info_block = await page.query_selector("div:has-text('Neue Features bei „Züge online“')")
+            if blue_info_block and await blue_info_block.is_visible():
+                await page.evaluate("""
+                    el => el.remove(),
+                    document.querySelector("div:has-text('Neue Features bei „Züge online“')")
+                """)
+                await asyncio.sleep(0.5)
+                print("✅ Blaues Info-Block-Overlay entfernt")
+                closed_any = True
+        except Exception:
+            pass
+
+        # 4️⃣ Abbruch bei Zeitlimit
         if (datetime.now() - start_time).total_seconds() * 1000 > max_wait:
             print("⚠️ Overlay-Entfernung abgebrochen (Zeitlimit erreicht)")
             break
@@ -118,7 +132,7 @@ async def scrape_stoerungen():
                         break
                     except Exception:
                         print(f"⚠️ Versuch {attempt+1}: Filter-Button nicht gefunden, erneut versuchen...")
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(1)
                 else:
                     raise Exception("Filter-Button nach 3 Versuchen nicht erreichbar")
             except Exception as e:
