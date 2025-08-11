@@ -18,6 +18,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 last_stoerungen = set()
 last_check_time = None
 
+
 # --- Healthcheck ---
 async def handle_health(request):
     return web.Response(text="OK")
@@ -33,6 +34,7 @@ async def start_web_server():
     await site.start()
     print(f"🌐 Health-Webserver läuft auf Port {port}")
 
+
 # --- Screenshot senden ---
 async def send_screenshot(page, fehlertext="Fehler"):
     channel = bot.get_channel(CHANNEL_ID)
@@ -46,35 +48,46 @@ async def send_screenshot(page, fehlertext="Fehler"):
             file=discord.File(fp=buffer, filename="screenshot.png")
         )
 
-# --- Overlays schließen ---
-async def ensure_no_overlays(page):
-    """Schließt alle bekannten Overlays, mehrfach wiederholt."""
-    for _ in range(6):  # bis zu 6 Versuche
-        found = False
 
-        # Cookie-/Analyse-Banner
+# --- Alle Overlays schließen ---
+async def ensure_no_overlays(page, max_wait=15000):
+    """
+    Schließt alle störenden Overlays (Cookie-Banner + Info-Overlay),
+    wiederholt bis keine mehr erscheinen oder max_wait erreicht.
+    """
+    start_time = datetime.now()
+    closed_any = True
+
+    while closed_any:
+        closed_any = False
+
+        # 1️⃣ Cookie-/Analyse-Banner
         try:
-            button = await page.query_selector("button:has-text('Ablehnen')")
-            if button:
-                await button.click()
+            ablehnen_btn = await page.query_selector("button:has-text('Ablehnen')")
+            if ablehnen_btn:
+                await ablehnen_btn.click()
+                await asyncio.sleep(1)
                 print("✅ Cookie-/Analyse-Banner abgelehnt")
-                found = True
-        except:
-            pass
+                closed_any = True
+        except Exception as e:
+            print(f"ℹ️ Kein Cookie-Banner gefunden: {e}")
 
-        # Blaues Info-Overlay
+        # 2️⃣ Blaues Info-Overlay
         try:
-            button = await page.query_selector("div[role='dialog'] button[aria-label='Schließen']")
-            if button:
-                await button.click()
+            info_close = await page.query_selector("div[role='dialog'] button[aria-label='Schließen']")
+            if info_close:
+                await info_close.click()
+                await asyncio.sleep(1)
                 print("✅ Info-Overlay geschlossen")
-                found = True
-        except:
-            pass
+                closed_any = True
+        except Exception as e:
+            print(f"ℹ️ Kein Info-Overlay gefunden: {e}")
 
-        if not found:
+        # Abbruch, wenn zu lange gewartet
+        if (datetime.now() - start_time).total_seconds() * 1000 > max_wait:
+            print("⚠️ Overlay-Entfernung abgebrochen (Zeitlimit erreicht)")
             break
-        await asyncio.sleep(1)
+
 
 # --- Haupt-Scraping ---
 async def scrape_stoerungen():
@@ -90,30 +103,27 @@ async def scrape_stoerungen():
             await page.wait_for_load_state("networkidle")
             await asyncio.sleep(2)
 
-            # Overlays mehrfach schließen
+            # Erstmal alle Overlays schließen
             await ensure_no_overlays(page)
 
-            # Filter öffnen mit Retry
+            # Filter öffnen mit wiederholtem Versuch
             try:
-                for attempt in range(2):  # max 2 Versuche
+                for attempt in range(3):
+                    await ensure_no_overlays(page)
                     try:
-                        toggle_button = await page.wait_for_selector(
-                            "button[aria-label='Filter öffnen']", timeout=15000
-                        )
+                        toggle_button = await page.wait_for_selector("button[aria-label='Filter öffnen']", timeout=5000)
                         await toggle_button.click()
+                        await asyncio.sleep(2)
                         print("✅ Filter geöffnet")
                         break
-                    except:
-                        print(f"⚠️ Filter öffnen fehlgeschlagen (Versuch {attempt+1}), retry...")
-                        await ensure_no_overlays(page)
+                    except Exception:
+                        print(f"⚠️ Versuch {attempt+1}: Filter-Button nicht gefunden, erneut versuchen...")
+                        await asyncio.sleep(2)
                 else:
-                    raise Exception("Filter-Button nach 2 Versuchen nicht erreichbar")
+                    raise Exception("Filter-Button nach 3 Versuchen nicht erreichbar")
             except Exception as e:
                 await send_screenshot(page, f"Filter-Panel konnte nicht geöffnet werden: {e}")
                 return []
-
-            # Nochmal Overlays checken
-            await ensure_no_overlays(page)
 
             # Baustellen & Streckenruhen ausschalten
             for label_text in ["Baustellen", "Streckenruhen"]:
@@ -139,7 +149,7 @@ async def scrape_stoerungen():
 
             await ensure_no_overlays(page)
 
-            # Sortieren
+            # Sortieren nach "Gültigkeit von"
             try:
                 sort_button = await page.wait_for_selector('th:has-text("Gültigkeit von")', timeout=5000)
                 await sort_button.click()
@@ -151,7 +161,7 @@ async def scrape_stoerungen():
                 await send_screenshot(page, f"Sortierung fehlgeschlagen: {e}")
                 return []
 
-            # Tabelle auslesen
+            # Tabelle laden
             await page.wait_for_selector("table tbody tr", timeout=15000)
             rows = await page.query_selector_all("table tbody tr")
 
@@ -193,6 +203,7 @@ async def scrape_stoerungen():
         print(f"❌ Fehler beim Scraping: {e}")
         return []
 
+
 # --- Check-Loop ---
 async def check_stoerungen():
     global last_stoerungen, last_check_time
@@ -210,6 +221,7 @@ async def check_stoerungen():
 
         await asyncio.sleep(600)  # alle 10 Minuten
 
+
 # --- Status-Befehl ---
 @bot.command()
 async def status(ctx):
@@ -221,10 +233,12 @@ async def status(ctx):
     else:
         await ctx.send("⏳ Noch keine Prüfung erfolgt.")
 
+
 @bot.event
 async def on_ready():
     print(f"✅ Bot gestartet als {bot.user}")
     bot.loop.create_task(check_stoerungen())
+
 
 # --- Start ---
 async def main():
@@ -238,4 +252,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("🛑 Bot wurde beendet.")
-
