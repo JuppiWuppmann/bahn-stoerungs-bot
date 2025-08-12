@@ -15,13 +15,14 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 ADMIN_ID = os.getenv("ADMIN_ID")
 
-# zeitlimits (ms / s)
-CLICK_TIMEOUT = 15000      # ms für wait_for_selector in safe_click
-OVERLAY_MAX_WAIT = 20000   # ms für overlay removal loop
-PAGE_LOAD_TIMEOUT = 60000  # ms
+# Timeouts (ms / s)
+CLICK_TIMEOUT_MS = 20000
+OVERLAY_MAX_WAIT_MS = 25000
+PAGE_LOAD_TIMEOUT_MS = 80000
+SCRAPE_INTERVAL_SEC = int(os.getenv("SCRAPE_INTERVAL_SEC", "600"))  # Standard 600s = 10min
 
 # -------------------------
-# Discord Bot Setup
+# Discord Setup
 # -------------------------
 intents = discord.Intents.default()
 intents.message_content = True
@@ -31,7 +32,7 @@ last_stoerungen = set()
 last_check_time = None
 
 # -------------------------
-# Healthcheck-Webserver (für Render)
+# Healthcheck (für Render / Uptimerobot)
 # -------------------------
 async def handle_health(request):
     return web.Response(text="OK")
@@ -48,13 +49,10 @@ async def start_web_server():
     print(f"🌐 Health-Webserver läuft auf Port {port}")
 
 # -------------------------
-# Hilfsfunktionen
+# Hilfsfunktionen für Discord Send
 # -------------------------
 async def safe_send_to_channel(channel, content=None, file_bytes=None, filename=None):
-    """
-    Sendet sicher an Discord-Channel, fängt Permission/HTTP-Fehler ab und loggt sie.
-    file_bytes = BytesIO instance or None
-    """
+    """Sendet an Channel, fängt fehlende Rechte / Fehler ab."""
     if channel is None:
         print("⚠️ Channel ist None — Nachricht nicht gesendet.")
         return False
@@ -73,15 +71,13 @@ async def safe_send_to_channel(channel, content=None, file_bytes=None, filename=
         return False
 
 async def send_screenshot(page, fehlertext="Fehler"):
-    """
-    Screenshot an Channel schicken (wenn möglich). Fehler werden geloggt.
-    """
+    """Erstellt Screenshot und versucht, ihn in den Bot-Channel zu senden (wenn möglich)."""
     try:
         channel = bot.get_channel(CHANNEL_ID)
         if not channel:
             print("⚠️ send_screenshot: Channel nicht gefunden.")
             return
-        screenshot_bytes = await page.screenshot(type="png")
+        screenshot_bytes = await page.screenshot(type="png", full_page=False)
         buffer = BytesIO(screenshot_bytes)
         buffer.name = "screenshot.png"
         buffer.seek(0)
@@ -90,150 +86,167 @@ async def send_screenshot(page, fehlertext="Fehler"):
         print("⚠️ Fehler beim Erstellen/Senden des Screenshots:", e)
 
 # -------------------------
-# Overlay-Handling (robust)
+# Overlay-Handling (aggressiv & mehrere Strategien)
 # -------------------------
-async def ensure_no_overlays(page, max_wait_ms=OVERLAY_MAX_WAIT):
+async def ensure_no_overlays(page, max_wait_ms=OVERLAY_MAX_WAIT_MS):
     """
-    Entfernt oder deaktiviert störende Overlays wie Usercentrics, Cookie-Banner, Dialoge.
-    Versucht Buttons zu klicken; falls das nicht geht, entfernt Elemente per JS.
+    Versucht in einer Schleife störende Overlays zu entfernen:
+     - klickt Ablehnen / Akzeptieren / Schließen Buttons
+     - entfernt per JS bekannte Overlay-Elemente
+     - setzt pointer-events:none bevor entfernt wird
     """
-    print("🔍 Starte Overlay-Entfernung...")
     start_ts = datetime.now().timestamp()
     while True:
         removed_any = False
-
         try:
-            # 1) direkte Buttons versuchen (Ablehnen / Alle akzeptieren / Schließen)
+            # Buttons klicken
             btn_selectors = [
                 "button:has-text('Ablehnen')",
                 "button:has-text('Alles akzeptieren')",
                 "button:has-text('Alle akzeptieren')",
                 "button[aria-label='Schließen']",
                 "button[aria-label='Close']",
-                "button:has-text('Schließen')"
+                "button:has-text('Schließen')",
+                "button:has-text('Accept')",
             ]
             for sel in btn_selectors:
-                btns = await page.query_selector_all(sel)
-                for b in btns:
-                    try:
-                        await b.click()
-                        await asyncio.sleep(0.4)
-                        print(f"✅ Overlay-Button {sel} geklickt")
-                        removed_any = True
-                    except Exception:
-                        # ignore individual button click failures
-                        pass
+                try:
+                    btns = await page.query_selector_all(sel)
+                    for b in btns:
+                        try:
+                            await b.click()
+                            await asyncio.sleep(0.35)
+                            print(f"✅ Overlay-Button {sel} geklickt")
+                            removed_any = True
+                        except Exception:
+                            # ignore single button click failure
+                            pass
+                except Exception:
+                    pass
         except Exception as e:
             print("⚠️ Fehler beim Klick auf Overlay-Buttons:", e)
 
+        # Spezifische Overlay-IDs / generische Elemente per JS entfernen
         try:
-            # 2) gezielte Overlay-IDs / roles entfernen (Usercentrics etc.)
             overlay_selectors = [
                 "#usercentrics-cmp-ui",
+                "aside[id^='usercentrics']",
                 "div[role='dialog']",
                 "div[class*='cookie']",
-                "aside[id^='usercentrics']",
                 "div[id*='cookie']",
                 "div[class*='overlay']",
+                "[style*='z-index']"
             ]
             for sel in overlay_selectors:
-                els = await page.query_selector_all(sel)
-                for el in els:
-                    try:
-                        # Versuche: set pointer-events none, then remove
-                        await page.evaluate("(el) => { el.style.pointerEvents = 'none'; el.remove(); }", el)
-                        print(f"🗑️ Overlay entfernt (selector={sel})")
-                        removed_any = True
-                    except Exception:
-                        pass
+                try:
+                    els = await page.query_selector_all(sel)
+                    for el in els:
+                        try:
+                            # set pointer-events none then remove
+                            await page.evaluate("(e)=>{ e.style.pointerEvents='none'; e.remove(); }", el)
+                            print(f"🗑️ Overlay entfernt (selector={sel})")
+                            removed_any = True
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
         except Exception as e:
             print("⚠️ Fehler beim Entfernen generischer Overlays:", e)
 
-        # Abbruch wenn zeitlimit
+        # stop if timed out
         if (datetime.now().timestamp() - start_ts) * 1000 > max_wait_ms:
             print("⚠️ Overlay-Entfernung abgebrochen (Zeitlimit erreicht)")
             break
 
         if not removed_any:
-            print("ℹ️ Keine Overlays mehr erkannt")
+            # nothing removed this pass -> done
             break
 
-        # kurze Pause bevor erneut prüfen
-        await asyncio.sleep(0.25)
+        # small pause before next loop
+        await asyncio.sleep(0.2)
 
 # -------------------------
-# Sicherer Klick mit Fallbacks
+# safe_click mit mehreren Fallbacks (click, force click, js-click, reload)
 # -------------------------
-async def safe_click(page, selector, timeout_ms=CLICK_TIMEOUT, description="Element", alt_selectors=None):
+async def safe_click(page, selector, timeout_ms=CLICK_TIMEOUT_MS, description="Element", alt_selectors=None):
     """
-    Versucht mehrfach, ein Element zu klicken:
-     - overlay removal vor jedem Versuch
-     - try normal click
-     - try eval_on_selector (JS click)
-     - reload Seite einmal vor letztem Versuch
+    Versucht mehrfach den angegebenen selector zu klicken.
+    - löscht Overlays vor jedem Versuch
+    - probiert alternative selector strings
+    - versucht normal click, force click, js click
+    - reload vor letzten Versuch
     """
     alt_selectors = alt_selectors or []
     selectors = [selector] + alt_selectors
     attempts = 4
     for attempt in range(1, attempts + 1):
         try:
-            # erst Overlays entfernen
             await ensure_no_overlays(page)
-            # probiere alle selector-Varianten
             for sel in selectors:
                 try:
                     el = await page.wait_for_selector(sel, timeout=timeout_ms)
-                    # 1) normaler click
+                    # bring into view
+                    try:
+                        await el.scroll_into_view_if_needed()
+                    except Exception:
+                        try:
+                            await page.evaluate("(e)=>e.scrollIntoView()", el)
+                        except Exception:
+                            pass
+                    # try normal click
                     try:
                         await el.click(timeout=timeout_ms)
-                        await asyncio.sleep(0.3)
+                        await asyncio.sleep(0.25)
                         print(f"✅ {description} geklickt mit '{sel}' (Versuch {attempt})")
                         return True
-                    except Exception as e_click:
-                        # 2) fallback: klick per JS direkt in der Seite
+                    except Exception:
+                        # try force click
                         try:
-                            await page.eval_on_selector(sel, "el => el.click()")
-                            await asyncio.sleep(0.3)
-                            print(f"✅ {description} per JS click ausgeführt mit '{sel}' (Versuch {attempt})")
+                            await el.click(force=True)
+                            await asyncio.sleep(0.25)
+                            print(f"✅ {description} force-geklickt mit '{sel}' (Versuch {attempt})")
                             return True
-                        except Exception as e_js:
-                            print(f"⚠️ Klick via JS für {sel} gescheitert: {e_js}")
-                            # weiter zu next sel
+                        except Exception:
+                            # try JS click
+                            try:
+                                await page.eval_on_selector(sel, "el => el.click()")
+                                await asyncio.sleep(0.25)
+                                print(f"✅ {description} JS-geklickt mit '{sel}' (Versuch {attempt})")
+                                return True
+                            except Exception as e_js:
+                                print(f"⚠️ JS-click für '{sel}' gescheitert: {e_js}")
+                                # fallthrough -> try next sel
                 except Exception as e_sel:
-                    # sel nicht gefunden in diesem Versuch
-                    # print(f"⚠️ Selector '{sel}' nicht gefunden: {e_sel}")
+                    # selector not found/visible - ignore here, try next selector
+                    # print(f"selector {sel} not found/ready: {e_sel}")
                     pass
-
-            # wenn hier, alle selector-varianten für diesen attempt fehlgeschlagen
-            raise Exception(f"Alle Selektoren für {description} gebrochen (Versuch {attempt})")
+            raise Exception(f"Kein Selector klickbar für {description} (Versuch {attempt})")
         except Exception as e:
             print(f"⚠️ {description} Klick fehlgeschlagen (Versuch {attempt}): {e}")
-            # letzter Versuch: reload wenn noch nicht schon gemacht
+            # Reload bevor letzter Versuch
             if attempt == attempts - 1:
                 try:
                     print("🔄 Seite reload vor letztem Versuch...")
                     await page.reload()
                     await page.wait_for_load_state("networkidle")
-                    await asyncio.sleep(0.8)
-                except Exception as e_reload:
-                    print("⚠️ Reload fehlgeschlagen:", e_reload)
+                    await asyncio.sleep(0.6)
+                except Exception as re:
+                    print("⚠️ Reload fehlgeschlagen:", re)
             if attempt == attempts:
-                # sende screenshot + abbrechen
                 try:
                     await send_screenshot(page, f"{description} konnte nicht geklickt werden: {e}")
                 except Exception:
                     pass
                 return False
-            await asyncio.sleep(0.6)
+            await asyncio.sleep(0.5)
     return False
 
 # -------------------------
-# Scraping-Funktion (Hauptlogik)
+# Scraping-Funktion (komplett robust)
 # -------------------------
 async def scrape_stoerungen():
     global last_stoerungen
     print(f"[{datetime.now()}] 🔁 scrape_stoerungen gestartet")
-
     browser = None
     context = None
     try:
@@ -243,29 +256,32 @@ async def scrape_stoerungen():
             page = await context.new_page()
             await page.set_extra_http_headers({"Accept-Language": "de-DE,de;q=0.9,en;q=0.8"})
 
-            # 1) Seite öffnen
-            await page.goto("https://strecken-info.de/", timeout=PAGE_LOAD_TIMEOUT)
+            # 1) open page
+            await page.goto("https://strecken-info.de/", timeout=PAGE_LOAD_TIMEOUT_MS)
             await page.wait_for_load_state("networkidle")
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.8)
 
-            # 2) Overlays robust entfernen (mehrere Strategien)
+            # 2) remove overlays aggressively
             await ensure_no_overlays(page)
 
-            # 3) Filter öffnen (robust)
+            # 3) Filter öffnen (robust, mehrere selector-fallbacks)
             ok = await safe_click(
                 page,
                 "button[aria-label='Filter öffnen']",
                 description="Filter öffnen",
-                alt_selectors=["button[aria-label='Filter']", "button:has-text('Filter')", "text=Filter"]
+                alt_selectors=[
+                    "button[aria-label='Filter']",
+                    "button:has-text('Filter')",
+                    "text=Filter"
+                ]
             )
             if not ok:
                 print("❌ Filter konnte nicht geöffnet werden -> Abbruch dieses Laufs")
-                # cleanup
                 await context.close()
                 await browser.close()
                 return []
 
-            # 4) Nochmal Overlays (falls eins nach Öffnen auftaucht)
+            # 4) overlay-check again (some overlays can appear after clicking)
             await ensure_no_overlays(page)
 
             # 5) Baustellen & Streckenruhen deaktivieren (falls sichtbar)
@@ -280,51 +296,61 @@ async def scrape_stoerungen():
                             except Exception:
                                 is_checked = False
                             if is_checked:
-                                # click checkbox
                                 try:
                                     await cb.click()
-                                    await asyncio.sleep(0.4)
-                                    print(f"✅ '{label_text}' deaktiviert")
+                                    await asyncio.sleep(0.3)
+                                    print(f"✅ '{label_text}' deaktiviert (checkbox click)")
                                 except Exception:
-                                    # fallback: eval_on_selector on label to toggle
+                                    # fallback: click label itself
                                     try:
                                         await page.eval_on_selector(f"label:has-text('{label_text}')", "el => el.click()")
-                                        await asyncio.sleep(0.4)
-                                        print(f"✅ '{label_text}' via label-click deaktiviert (Fallback)")
+                                        await asyncio.sleep(0.3)
+                                        print(f"✅ '{label_text}' deaktiviert (label-click fallback)")
                                     except Exception:
                                         print(f"⚠️ Konnte '{label_text}' nicht deaktivieren")
                 except Exception as e:
                     print(f"⚠️ Fehler beim Deaktivieren von {label_text}: {e}")
 
-            # 6) 'Einschränkungen' Tab öffnen
-            ok = await safe_click(page, "text=Einschränkungen", description="Einschränkungen aktivieren",
-                                  alt_selectors=["button:has-text('Einschränkungen')", "a:has-text('Einschränkungen')"])
+            # 6) 'Einschränkungen' Tab / Button aktivieren
+            ok = await safe_click(
+                page,
+                "text=Einschränkungen",
+                description="Einschränkungen aktivieren",
+                alt_selectors=["button:has-text('Einschränkungen')", "a:has-text('Einschränkungen')"]
+            )
             if not ok:
                 print("❌ 'Einschränkungen' Tab konnte nicht aktiviert werden -> Abbruch dieses Laufs")
                 await context.close()
                 await browser.close()
                 return []
 
-            await asyncio.sleep(0.7)
+            await asyncio.sleep(0.6)
             await ensure_no_overlays(page)
 
-            # 7) Sortieren nach "Gültigkeit von" (zweimal)
-            ok = await safe_click(page, 'th:has-text("Gültigkeit von")', description="Tabelle sortieren",
-                                  alt_selectors=["table thead th:nth-last-child(2)"])
-            if not ok:
-                print("⚠️ Warnung: Sortierung konnte nicht angewendet (weiter mit aktueller Reihenfolge)")
-            else:
-                # zweiter Klick ruhiger: falls sortierung nötig nochmal versuchen
-                await asyncio.sleep(0.35)
+            # 7) Sortieren nach "Gültigkeit von" (2x click). Verwendet Fallbacks.
+            ok = await safe_click(
+                page,
+                "th:has-text('Gültigkeit von')",
+                description="Tabelle sortieren",
+                alt_selectors=["text=Gültigkeit von", "table thead th:nth-last-child(2)"]
+            )
+            if ok:
+                # second click attempt if available
                 try:
-                    await page.eval_on_selector('th:has-text("Gültigkeit von")', "el => el.click()")
-                    await asyncio.sleep(0.4)
+                    await asyncio.sleep(0.35)
+                    # try js click to ensure second toggle
+                    try:
+                        await page.eval_on_selector("th:has-text('Gültigkeit von')", "el => el.click()")
+                    except Exception:
+                        # fallback: click same selector normally again via safe_click small timeout
+                        await safe_click(page, "th:has-text('Gültigkeit von')", timeout_ms=5000, description="Tabelle sortieren (zweites Mal)")
                 except Exception:
-                    # ignore
                     pass
+            else:
+                print("⚠️ Sortierung nicht möglich - wir fahren mit aktueller Reihenfolge fort")
 
-            # 8) Tabelle warten & auslesen
-            await page.wait_for_selector("table tbody tr", timeout=15000)
+            # 8) Tabelle auslesen
+            await page.wait_for_selector("table tbody tr", timeout=20000)
             rows = await page.query_selector_all("table tbody tr")
             print(f"🔍 Gefundene Tabellenzeilen: {len(rows)}")
 
@@ -334,7 +360,6 @@ async def scrape_stoerungen():
                     cols = await row.query_selector_all("td")
                     if len(cols) < 8:
                         continue
-
                     id_text = (await cols[0].inner_text()).strip()
                     typ = (await cols[1].inner_text()).strip()
                     ort = (await cols[2].inner_text()).strip()
@@ -346,9 +371,8 @@ async def scrape_stoerungen():
 
                     if typ.lower() in ["baustelle", "streckenruhe"]:
                         continue
-
                     if id_text not in last_stoerungen:
-                        message = (
+                        text = (
                             "🚨 **Neue Bahn-Störung entdeckt!**\n\n"
                             f"🆔 **ID:** {id_text}\n"
                             f"📌 **Typ:** {typ}\n"
@@ -358,7 +382,7 @@ async def scrape_stoerungen():
                             f"📋 **Ursache:** {ursache}\n"
                             f"⏰ **Gültigkeit:** {gueltig_von} → {gueltig_bis}"
                         )
-                        new_stoerungen.append({"id": id_text, "text": message})
+                        new_stoerungen.append({"id": id_text, "text": text})
                 except Exception as e:
                     print("⚠️ Fehler beim Auslesen einer Tabellenzeile:", e)
                     continue
@@ -382,41 +406,32 @@ async def scrape_stoerungen():
         return []
 
 # -------------------------
-# Prüf-Loop: Scrapen und an Discord senden
+# Prüf-Loop: Scrapen + Discord
 # -------------------------
 async def check_stoerungen():
     global last_stoerungen, last_check_time
     await bot.wait_until_ready()
     channel = bot.get_channel(CHANNEL_ID)
     if channel:
-        # optional start message
-        try:
-            await safe_send_to_channel(channel, "✅ Bahn-Störungs-Bot wurde gestartet!")
-        except Exception:
-            pass
-
+        await safe_send_to_channel(channel, "✅ Bahn-Störungs-Bot gestartet!")
     while not bot.is_closed():
         stoerungen = await scrape_stoerungen()
         last_check_time = datetime.now()
-
         if stoerungen:
             channel = bot.get_channel(CHANNEL_ID)
             for s in stoerungen:
                 if s["id"] not in last_stoerungen:
                     last_stoerungen.add(s["id"])
                     if channel:
-                        success = await safe_send_to_channel(channel, s["text"])
-                        if not success:
-                            print(f"⚠️ Nachricht für {s['id']} konnte nicht gesendet werden.")
+                        await safe_send_to_channel(channel, s["text"])
                     else:
-                        print("⚠️ Channel nicht verfügbar - Nachricht nicht gesendet.")
+                        print(f"⚠️ Channel nicht gefunden - Störung {s['id']} nicht gesendet")
         else:
             print("ℹ️ Keine neuen Störungen in diesem Durchlauf")
-
-        await asyncio.sleep(600)  # 10 Minuten
+        await asyncio.sleep(SCRAPE_INTERVAL_SEC)
 
 # -------------------------
-# Admin-Status-Command
+# Status Command
 # -------------------------
 @bot.command()
 async def status(ctx):
@@ -434,16 +449,14 @@ async def on_ready():
     bot.loop.create_task(check_stoerungen())
 
 # -------------------------
-# Main: Health-Webserver + Discord starten
+# Main
 # -------------------------
 async def main():
-    await asyncio.gather(
-        start_web_server(),
-        bot.start(DISCORD_TOKEN)
-    )
+    await asyncio.gather(start_web_server(), bot.start(DISCORD_TOKEN))
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("🛑 Bot wurde beendet.")
+        print("🛑 Bot beendet.")
+
