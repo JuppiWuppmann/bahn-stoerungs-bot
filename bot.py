@@ -47,75 +47,44 @@ async def send_screenshot(page, fehlertext="Fehler"):
         )
 
 # --- Overlays schließen ---
-async def ensure_no_overlays(page, max_wait=15000):
+async def ensure_no_overlays(page, max_wait=30000):
     print("🔍 Starte Overlay-Entfernung...")
     start_time = datetime.now()
 
     while True:
         closed_any = False
 
-        # Usercentrics-Overlay
-        try:
-            uc_overlay = await page.query_selector("#usercentrics-cmp-ui")
-            if uc_overlay:
-                print("⚠️ Usercentrics Overlay gefunden!")
-                ablehnen_btn = await page.query_selector("button:has-text('Ablehnen')")
-                akzeptieren_btn = await page.query_selector("button:has-text('Alles akzeptieren')")
-
-                if ablehnen_btn:
-                    await ablehnen_btn.click()
-                    await asyncio.sleep(1)
-                    print("✅ Usercentrics Overlay: 'Ablehnen' geklickt")
-                    closed_any = True
-                elif akzeptieren_btn:
-                    await akzeptieren_btn.click()
-                    await asyncio.sleep(1)
-                    print("✅ Usercentrics Overlay: 'Alles akzeptieren' geklickt")
-                    closed_any = True
-                else:
-                    # Fallback: Element komplett entfernen
-                    await page.evaluate("el => el.remove()", uc_overlay)
-                    print("🗑️ Usercentrics Overlay entfernt (kein Button klickbar)")
-                    closed_any = True
-        except Exception as e:
-            print(f"⚠️ Fehler bei Usercentrics-Check: {e}")
-
-        # Cookie-/Analyse-Banner
-        try:
-            ablehnen_btn = await page.query_selector("button:has-text('Ablehnen')")
-            if ablehnen_btn:
-                await ablehnen_btn.click()
-                await asyncio.sleep(0.8)
-                print("✅ Cookie-/Analyse-Banner abgelehnt")
+        # Generischer Overlay-Entferner (auch invisible)
+        overlays = await page.query_selector_all("#usercentrics-cmp-ui, div[role='dialog'], div[style*='z-index']")
+        for ov in overlays:
+            try:
+                styles = await page.evaluate(
+                    "(el) => window.getComputedStyle(el).getPropertyValue('pointer-events')", ov
+                )
+                if styles == "none":
+                    continue
+                await page.evaluate("el => el.remove()", ov)
+                print("🗑️ Overlay entfernt (generisch)")
                 closed_any = True
-        except:
-            pass
+            except:
+                pass
 
-        # Allgemeine Schließen-Buttons
-        try:
-            close_buttons = await page.query_selector_all("button[aria-label='Schließen']")
-            for btn in close_buttons:
-                await btn.click()
-                await asyncio.sleep(0.8)
-                print("✅ Anderes Overlay geschlossen")
-                closed_any = True
-        except:
-            pass
-
-        # Neues Feature Overlay
-        try:
-            info_overlay = await page.query_selector("div[role='dialog'], div:has-text('Neue Funktion'), div:has-text('Neues Feature')")
-            if info_overlay:
-                close_btn = await info_overlay.query_selector("button[aria-label='Schließen']")
-                if close_btn:
-                    await close_btn.click()
-                    await asyncio.sleep(0.8)
-                    print("✅ 'Neues Feature'-Overlay geschlossen")
+        # Buttons zum Ablehnen / Schließen
+        for sel in [
+            "button:has-text('Ablehnen')",
+            "button:has-text('Alles akzeptieren')",
+            "button[aria-label='Schließen']"
+        ]:
+            try:
+                btns = await page.query_selector_all(sel)
+                for b in btns:
+                    await b.click()
+                    await asyncio.sleep(0.5)
+                    print(f"✅ Button {sel} geklickt")
                     closed_any = True
-        except:
-            pass
+            except:
+                pass
 
-        # Zeitlimit prüfen
         if (datetime.now() - start_time).total_seconds() * 1000 > max_wait:
             print("⚠️ Overlay-Entfernung abgebrochen (Zeitlimit erreicht)")
             break
@@ -123,21 +92,31 @@ async def ensure_no_overlays(page, max_wait=15000):
         if not closed_any:
             break
 
-# --- Sicherer Klick mit mehrfachen Versuchen ---
-async def safe_click(page, selector, timeout=15000, description="Element"):
-    for attempt in range(3):
+# --- Sicherer Klick mit mehrfachen Versuchen + Reload ---
+async def safe_click(page, selector, timeout=30000, description="Element", alt_selectors=None):
+    selectors_to_try = [selector] + (alt_selectors or [])
+    for attempt in range(4):  # letzter Versuch nach Reload
         try:
             await ensure_no_overlays(page)
-            el = await page.wait_for_selector(selector, timeout=timeout)
-            await el.click()
-            await asyncio.sleep(0.5)
-            print(f"✅ {description} geklickt (Versuch {attempt+1})")
-            return True
+            for sel in selectors_to_try:
+                try:
+                    el = await page.wait_for_selector(sel, timeout=timeout)
+                    await el.click()
+                    await asyncio.sleep(0.5)
+                    print(f"✅ {description} geklickt mit Selector {sel} (Versuch {attempt+1})")
+                    return True
+                except Exception as e:
+                    print(f"⚠️ {description} mit {sel} fehlgeschlagen: {e}")
+            raise Exception("Alle Selektoren fehlgeschlagen")
         except Exception as e:
             print(f"⚠️ {description} Klick fehlgeschlagen (Versuch {attempt+1}): {e}")
-            if attempt == 2:
+            if attempt == 3:
                 await send_screenshot(page, f"{description} konnte nicht geklickt werden: {e}")
                 return False
+            if attempt == 2:
+                print("🔄 Letzter Versuch nach Seiten-Reload...")
+                await page.reload()
+                await page.wait_for_load_state("networkidle")
             await asyncio.sleep(1)
     return False
 
@@ -155,10 +134,14 @@ async def scrape_stoerungen():
             await page.wait_for_load_state("networkidle")
             await asyncio.sleep(2)
 
-            # Filter öffnen
-            if not await safe_click(page, "button[aria-label='Filter öffnen']", description="Filter öffnen"):
-                if not await safe_click(page, "button:has-text('Filter')", description="Filter öffnen (Alternative)"):
-                    return []
+            # Filter öffnen (mit Fallback)
+            if not await safe_click(
+                page,
+                "button[aria-label='Filter öffnen']",
+                description="Filter öffnen",
+                alt_selectors=["button:has-text('Filter')"]
+            ):
+                return []
 
             # Baustellen & Streckenruhen ausschalten
             for label_text in ["Baustellen", "Streckenruhen"]:
@@ -178,14 +161,21 @@ async def scrape_stoerungen():
                 return []
 
             # Tabelle sortieren (mit Fallback)
-            if not await safe_click(page, 'th:has-text("Gültigkeit von")', description="Tabelle sortieren"):
-                ths = await page.query_selector_all("table thead th")
-                if ths:
-                    await ths[-2].click()
-                    print("✅ Tabelle sortiert (Fallback)")
-                    await asyncio.sleep(0.5)
+            if not await safe_click(
+                page,
+                'th:has-text("Gültigkeit von")',
+                description="Tabelle sortieren",
+                alt_selectors=["table thead th:nth-last-child(2)"]
+            ):
+                print("⚠️ Sortierung über Fallback-Spalte")
 
-            await safe_click(page, 'th:has-text("Gültigkeit von")', description="Tabelle sortieren (zweites Mal)")
+            # Zweites Mal sortieren zur Sicherheit
+            await safe_click(
+                page,
+                'th:has-text("Gültigkeit von")',
+                description="Tabelle sortieren (zweites Mal)",
+                alt_selectors=["table thead th:nth-last-child(2)"]
+            )
 
             # Tabelle lesen
             await page.wait_for_selector("table tbody tr", timeout=15000)
