@@ -1,10 +1,8 @@
-# BAHN-STÖRUNGS-BOT – gefixte Version mit Doppel-Klick auf "Gültigkeit von"
+# BAHN-STÖRUNGS-BOT – Version mit "Störung beendet"-Funktion
 # Änderungen:
-#  - Aggressive Overlay-Entfernung vor JEDEM Klick
-#  - safe_click() mit Scroll + force=True + direktem JS-Klick
-#  - Mehr Selector-Fallbacks für "Gültigkeit von"
-#  - Doppelter Klick mit Pausen, um neueste Störungen zuerst zu zeigen
-#  - Timeout leicht erhöht für Render-Latenz
+#  - last_stoerungen speichert jetzt {id: gültig_bis_datetime}
+#  - Prüfung, ob Störung nicht mehr vorhanden oder abgelaufen -> ✅ Meldung senden
+#  - Bestehende Logik zum Erkennen neuer Störungen bleibt
 
 import os
 import asyncio
@@ -28,7 +26,8 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-last_stoerungen = set()
+# last_stoerungen speichert jetzt Ablaufdatum
+last_stoerungen = {}  # {id: datetime_obj}
 last_check_time = None
 
 async def handle_health(request):
@@ -175,7 +174,6 @@ async def safe_click(page, selector, timeout_ms=CLICK_TIMEOUT, description="Elem
     return False
 
 async def scrape_stoerungen():
-    global last_stoerungen
     print(f"[{datetime.now()}] 🔁 scrape_stoerungen gestartet")
     browser = None
     context = None
@@ -229,7 +227,7 @@ async def scrape_stoerungen():
             rows = await page.query_selector_all("table tbody tr")
             print(f"🔍 Gefundene Zeilen: {len(rows)}")
 
-            new_stoerungen = []
+            stoerungen = []
             for row in rows:
                 try:
                     cols = await row.query_selector_all("td")
@@ -243,22 +241,33 @@ async def scrape_stoerungen():
                     ursache = (await cols[5].inner_text()).strip()
                     gueltig_von = (await cols[6].inner_text()).strip()
                     gueltig_bis = (await cols[7].inner_text()).strip()
+
                     if typ.lower() in ["baustelle", "streckenruhe"]:
                         continue
-                    if id_text not in last_stoerungen:
-                        new_stoerungen.append({"id": id_text, "text": f"""🚨 **Neue Bahn-Störung entdeckt!**
+
+                    try:
+                        gueltig_bis_dt = datetime.strptime(gueltig_bis, "%d.%m.%Y %H:%M")
+                    except:
+                        gueltig_bis_dt = None
+
+                    stoerungen.append({
+                        "id": id_text,
+                        "gueltig_bis": gueltig_bis_dt,
+                        "text": f"""🚨 **Neue Bahn-Störung entdeckt!**
 🆔 **ID:** {id_text}
 📌 **Typ:** {typ}
 📍 **Ort:** {ort}
 🗺️ **Region:** {region}
 🚦 **Wirkung:** {wirkung}
 📋 **Ursache:** {ursache}
-⏰ **Gültigkeit:** {gueltig_von} → {gueltig_bis}"""})
+⏰ **Gültigkeit:** {gueltig_von} → {gueltig_bis}"""
+                    })
                 except:
                     pass
+
             await context.close()
             await browser.close()
-            return new_stoerungen
+            return stoerungen
     except Exception as e:
         print("❌ Fehler beim Scraping:", e)
         traceback.print_exc()
@@ -278,15 +287,23 @@ async def check_stoerungen():
     while not bot.is_closed():
         stoerungen = await scrape_stoerungen()
         last_check_time = datetime.now()
-        if stoerungen:
-            channel = bot.get_channel(CHANNEL_ID)
-            for s in stoerungen:
-                if s["id"] not in last_stoerungen:
-                    last_stoerungen.add(s["id"])
-                    if channel:
-                        await safe_send_to_channel(channel, s["text"])
-        else:
-            print("ℹ️ Keine neuen Störungen.")
+
+        current_ids = {s["id"] for s in stoerungen}
+
+        # 1️⃣ Beendete Störungen erkennen
+        for sid, bis_dt in list(last_stoerungen.items()):
+            if sid not in current_ids or (bis_dt and bis_dt < datetime.now()):
+                if channel:
+                    await safe_send_to_channel(channel, f"✅ **Bahn-Störung beendet:** ID {sid}")
+                del last_stoerungen[sid]
+
+        # 2️⃣ Neue Störungen senden
+        for s in stoerungen:
+            if s["id"] not in last_stoerungen:
+                last_stoerungen[s["id"]] = s["gueltig_bis"]
+                if channel:
+                    await safe_send_to_channel(channel, s["text"])
+
         await asyncio.sleep(600)
 
 @bot.command()
@@ -312,3 +329,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("🛑 Bot beendet.")
+
