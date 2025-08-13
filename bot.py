@@ -1,8 +1,7 @@
-# BAHN-STÖRUNGS-BOT – Version mit "Störung beendet"-Funktion
+# BAHN-STÖRUNGS-BOT – Version mit "Störung beendet"-Details
 # Änderungen:
-#  - last_stoerungen speichert jetzt {id: gültig_bis_datetime}
-#  - Prüfung, ob Störung nicht mehr vorhanden oder abgelaufen -> ✅ Meldung senden
-#  - Bestehende Logik zum Erkennen neuer Störungen bleibt
+#  - last_stoerungen speichert alle Infos
+#  - Bei Beendigung: ausführliche Meldung mit Zeitraum, Ort, Ursache usw.
 
 import os
 import asyncio
@@ -26,8 +25,8 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# last_stoerungen speichert jetzt Ablaufdatum
-last_stoerungen = {}  # {id: datetime_obj}
+# Speichert jetzt ALLE Details
+last_stoerungen = {}  
 last_check_time = None
 
 async def handle_health(request):
@@ -214,14 +213,10 @@ async def scrape_stoerungen():
             await asyncio.sleep(0.7)
             await ensure_no_overlays(page)
 
-            # Doppel-Klick für neueste zuerst
             for i in range(2):
                 if await safe_click(page, 'th:has-text("Gültigkeit von")', description=f"Tabelle sortieren Klick {i+1}",
                                     alt_selectors=["text=Gültigkeit von", "table thead th:nth-last-child(2)"]):
                     await asyncio.sleep(0.3)
-                else:
-                    print("⚠️ Sortierung nicht möglich.")
-                    break
 
             await page.wait_for_selector("table tbody tr", timeout=20000)
             rows = await page.query_selector_all("table tbody tr")
@@ -253,6 +248,12 @@ async def scrape_stoerungen():
                     stoerungen.append({
                         "id": id_text,
                         "gueltig_bis": gueltig_bis_dt,
+                        "gueltig_von": gueltig_von,
+                        "typ": typ,
+                        "ort": ort,
+                        "region": region,
+                        "wirkung": wirkung,
+                        "ursache": ursache,
                         "text": f"""🚨 **Neue Bahn-Störung entdeckt!**
 🆔 **ID:** {id_text}
 📌 **Typ:** {typ}
@@ -284,23 +285,38 @@ async def check_stoerungen():
     channel = bot.get_channel(CHANNEL_ID)
     if channel:
         await safe_send_to_channel(channel, "✅ Bahn-Störungs-Bot gestartet!")
+
     while not bot.is_closed():
         stoerungen = await scrape_stoerungen()
         last_check_time = datetime.now()
-
         current_ids = {s["id"] for s in stoerungen}
 
-        # 1️⃣ Beendete Störungen erkennen
-        for sid, bis_dt in list(last_stoerungen.items()):
-            if sid not in current_ids or (bis_dt and bis_dt < datetime.now()):
+        # Beendete Störungen
+        for sid, details in list(last_stoerungen.items()):
+            if sid not in current_ids or (details["gueltig_bis"] and details["gueltig_bis"] < datetime.now()):
                 if channel:
-                    await safe_send_to_channel(channel, f"✅ **Bahn-Störung beendet:** ID {sid}")
+                    await safe_send_to_channel(channel, f"""✅ **Bahn-Störung behoben!**
+🆔 **ID:** {sid}
+📌 **Typ:** {details['typ']}
+📍 **Ort:** {details['ort']}
+🗺️ **Region:** {details['region']}
+🚦 **Wirkung:** {details['wirkung']}
+📋 **Ursache:** {details['ursache']}
+⏰ **Dauer:** {details['gueltig_von']} → {details['gueltig_bis'].strftime('%d.%m.%Y %H:%M') if details['gueltig_bis'] else 'unbekannt'}""")
                 del last_stoerungen[sid]
 
-        # 2️⃣ Neue Störungen senden
+        # Neue Störungen
         for s in stoerungen:
             if s["id"] not in last_stoerungen:
-                last_stoerungen[s["id"]] = s["gueltig_bis"]
+                last_stoerungen[s["id"]] = {
+                    "gueltig_bis": s["gueltig_bis"],
+                    "gueltig_von": s["gueltig_von"],
+                    "typ": s["typ"],
+                    "ort": s["ort"],
+                    "region": s["region"],
+                    "wirkung": s["wirkung"],
+                    "ursache": s["ursache"]
+                }
                 if channel:
                     await safe_send_to_channel(channel, s["text"])
 
@@ -329,4 +345,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("🛑 Bot beendet.")
-
