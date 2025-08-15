@@ -42,43 +42,44 @@ async def safe_send(channel, text):
     except Exception as e:
         print("❌ Discord-Fehler:", e)
 
-# 🔍 Scraping der Störungen
 async def scrape_stoerungen():
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
-        context = await browser.new_context(viewport={"width": 1366, "height": 900})
+    async with async_playwright() as playwright:
+        print("🚀 Starte Browser...")
+        browser = await playwright.chromium.launch(headless=True)
+
+        context = await browser.new_context(
+            viewport={"width": 1366, "height": 900},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/115 Safari/537.36"
+        )
+
         page = await context.new_page()
-        await page.goto("https://strecken-info.de/", timeout=PAGE_LOAD_TIMEOUT)
-        await page.wait_for_selector("table tbody tr", timeout=20000)
+        print("🌐 Lade Seite...")
+        await page.goto("https://strecken-info.de/", timeout=60000)
+
+        # 🧼 Popup schließen, falls vorhanden
+        popup_selector = "button#accept-cookies"  # Beispiel: Anpassen je nach tatsächlichem Button
+        if await page.query_selector(popup_selector):
+            print("🔒 Popup gefunden – wird geschlossen...")
+            await page.click(popup_selector)
+        else:
+            print("✅ Kein Popup gefunden.")
+
+        # 🕒 Warten auf Tabelle
+        print("📊 Warte auf Tabelle mit Störungen...")
+        await page.wait_for_selector("table tbody tr", timeout=40000)
+
+        # 🔍 Tabelle extrahieren
         rows = await page.query_selector_all("table tbody tr")
-
         stoerungen = []
+
         for row in rows:
-            cols = await row.query_selector_all("td")
-            if len(cols) < 8:
-                continue
-            id_text = (await cols[0].inner_text()).strip()
-            typ = (await cols[1].inner_text()).strip()
-            ort = (await cols[2].inner_text()).strip()
-            wirkung = (await cols[4].inner_text()).strip()
-            ursache = (await cols[5].inner_text()).strip()
-            gueltig_bis_str = (await cols[7].inner_text()).strip()
-            try:
-                gueltig_bis = datetime.strptime(gueltig_bis_str, "%d.%m.%Y %H:%M")
-            except:
-                gueltig_bis = None
+            cells = await row.query_selector_all("td")
+            if len(cells) >= 2:
+                datum = await cells[0].inner_text()
+                beschreibung = await cells[1].inner_text()
+                stoerungen.append({"datum": datum.strip(), "beschreibung": beschreibung.strip()})
 
-            if typ.lower() in ["baustelle", "streckenruhe"]:
-                continue
-
-            stoerungen.append({
-                "id": id_text,
-                "ort": ort,
-                "wirkung": wirkung,
-                "ursache": ursache,
-                "gueltig_bis": gueltig_bis
-            })
-
+        print(f"✅ {len(stoerungen)} Störungen gefunden.")
         await browser.close()
         return stoerungen
 
