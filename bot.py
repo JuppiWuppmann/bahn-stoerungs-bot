@@ -39,7 +39,7 @@ async def init_x_session():
         return None
 
     pw = await async_playwright().start()
-    browser = await pw.chromium.launch(headless=True, args=["--no-sandbox"])
+    browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
     x_context = await browser.new_context()
 
     # Cookies laden
@@ -168,36 +168,40 @@ async def check_stoerungen():
     channel = bot.get_channel(CHANNEL_ID)
 
     while not bot.is_closed():
-        stoerungen = await scrape_stoerungen()
-        last_check_time = datetime.now()
-        current_ids = {s["id"] for s in stoerungen}
+        try:
+            stoerungen = await scrape_stoerungen()
+            last_check_time = datetime.now()
+            current_ids = {s["id"] for s in stoerungen}
 
-        # Beendete Störungen
-        for sid, details in list(last_stoerungen.items()):
-            if sid not in current_ids or (details["gueltig_bis"] and details["gueltig_bis"] < datetime.now()):
-                msg = f"""✅ **Bahn-Störung behoben!**
+            # Beendete Störungen
+            for sid, details in list(last_stoerungen.items()):
+                if sid not in current_ids or (details["gueltig_bis"] and details["gueltig_bis"] < datetime.now()):
+                    msg = f"""✅ **Bahn-Störung behoben!**
 🆔 {sid}
 📍 {details['ort']}
 🚦 {details['wirkung']}
 📋 {details['ursache']}
 ⏰ {details['gueltig_von']} → {details['gueltig_bis'].strftime('%d.%m.%Y %H:%M') if details['gueltig_bis'] else 'unbekannt'}"""
-                if channel:
-                    await safe_send_to_channel(channel, msg)
-                await post_to_x(msg)
-                del last_stoerungen[sid]
+                    if channel:
+                        await safe_send_to_channel(channel, msg)
+                    await post_to_x(msg)
+                    del last_stoerungen[sid]
 
-        # Neue Störungen
-        for s in stoerungen:
-            if s["id"] not in last_stoerungen:
-                last_stoerungen[s["id"]] = s
-                msg = f"""🚨 Neue Bahn-Störung!
+            # Neue Störungen
+            for s in stoerungen:
+                if s["id"] not in last_stoerungen:
+                    last_stoerungen[s["id"]] = s
+                    msg = f"""🚨 Neue Bahn-Störung!
 🆔 {s['id']}
 📍 {s['ort']}
 🚦 {s['wirkung']}
 📋 {s['ursache']}"""
-                if channel:
-                    await safe_send_to_channel(channel, msg)
-                await post_to_x(msg)
+                    if channel:
+                        await safe_send_to_channel(channel, msg)
+                    await post_to_x(msg)
+
+        except Exception:
+            traceback.print_exc()
 
         await asyncio.sleep(600)
 
@@ -227,3 +231,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("🛑 Bot beendet.")
+
