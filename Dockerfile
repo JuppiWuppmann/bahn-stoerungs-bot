@@ -30,7 +30,7 @@ RUN apt-get update && apt-get install -y \
     libxcb-dri3-0 \
     libgbm-dev \
     fonts-unifont \
-    fonts-ubuntu \
+    fonts-dejavu \
     && apt-get clean
 
 COPY requirements.txt .
