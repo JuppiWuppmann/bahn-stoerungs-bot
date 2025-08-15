@@ -29,13 +29,15 @@ RUN apt-get update && apt-get install -y \
     libxkbcommon0 \
     libxcb-dri3-0 \
     libgbm-dev \
+    fonts-unifont \
+    fonts-ubuntu \
     && apt-get clean
 
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# Installiere Playwright + Browser
-RUN python -m playwright install --with-deps chromium
+# Installiere nur den Chromium-Browser, ohne Systempakete
+RUN python -m playwright install chromium
 
 COPY . .
 
