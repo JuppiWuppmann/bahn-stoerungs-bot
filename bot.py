@@ -79,7 +79,7 @@ async def scrape_stoerungen():
             await page.wait_for_load_state("networkidle")
 
             # Filter öffnen
-            await page.click("button[aria-label='Filter öffnen']", timeout=5000)
+            await page.click("button[aria-label='Filter öffnen']", timeout=15000)
 
             # Baustellen und Streckenruhen abwählen
             for label_text in ["Baustellen", "Streckenruhen"]:
