@@ -1,9 +1,3 @@
-# BAHN-STÖRUNGS-BOT mit Discord + X (Playwright)
-# -------------------------------------------------
-# - Discord bleibt unverändert
-# - X-Integration mit Playwright, dauerhaft eingeloggt via x_storage.json
-# - Meldet neue Störungen + behobene Störungen
-
 import os
 import asyncio
 from datetime import datetime
@@ -26,10 +20,8 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Speichert jetzt ALLE Details
 last_stoerungen = {}
 last_check_time = None
-
 
 # ---------------------------
 # Health Server
@@ -47,7 +39,6 @@ async def start_web_server():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
     print(f"🌐 Health-Webserver läuft auf Port {port}")
-
 
 # ---------------------------
 # Discord Hilfsfunktionen
@@ -76,14 +67,13 @@ async def send_screenshot(page, fehlertext="Fehler"):
         if not channel:
             print("⚠️ send_screenshot: Channel nicht gefunden.")
             return
-        screenshot_bytes = await page.screenshot(type="png", full_page=True)
+        screenshot_bytes = await page.screenshot(type="png")  # Kein full_page
         buffer = BytesIO(screenshot_bytes)
         buffer.name = "screenshot.png"
         buffer.seek(0)
         await safe_send_to_channel(channel, content=f"❌ **Fehler beim Scraping:** {fehlertext}", file_bytes=buffer, filename="screenshot.png")
     except Exception as e:
         print("⚠️ Fehler beim Screenshot:", e)
-
 
 # ---------------------------
 # X-Integration (Playwright)
@@ -94,23 +84,15 @@ async def send_to_x(message: str):
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(storage_state="x_storage.json")
             page = await context.new_page()
-
-            # Tweet-Seite öffnen
             await page.goto("https://x.com/compose/tweet")
             await page.wait_for_selector("div[role='textbox']", timeout=15000)
-
-            # Nachricht eintragen (max 280 Zeichen)
             await page.fill("div[role='textbox']", message[:280])
-
-            # Absenden
             await page.click("div[data-testid='tweetButtonInline']")
-
             print("✅ Nachricht auf X gepostet:", message[:80])
             await context.close()
             await browser.close()
     except Exception as e:
         print("❌ Fehler beim Posten auf X:", e)
-
 
 # ---------------------------
 # Overlay- und Klick-Handling
@@ -129,9 +111,10 @@ async def ensure_no_overlays(page, max_wait_ms=OVERLAY_MAX_WAIT):
                 "button:has-text('Schließen')"
             ]
             for sel in btn_selectors:
-                for b in await page.query_selector_all(sel):
+                el = await page.query_selector(sel)
+                if el:
                     try:
-                        await b.click()
+                        await el.click()
                         await asyncio.sleep(0.3)
                         removed_any = True
                     except:
@@ -149,91 +132,77 @@ async def ensure_no_overlays(page, max_wait_ms=OVERLAY_MAX_WAIT):
                 "[style*='z-index']"
             ]
             for sel in overlay_selectors:
-                for el in await page.query_selector_all(sel):
+                el = await page.query_selector(sel)
+                if el:
                     try:
-                        await page.evaluate("(el) => { el.style.pointerEvents = 'none'; el.remove(); }", el)
+                        await page.evaluate("(el) => el.remove()", el)
                         removed_any = True
                     except:
                         pass
         except:
             pass
-        if (datetime.now().timestamp() - start_ts) * 1000 > max_wait_ms:
-            break
-        if not removed_any:
+        if (datetime.now().timestamp() - start_ts) * 1000 > max_wait_ms or not removed_any:
             break
         await asyncio.sleep(0.25)
 
 async def safe_click(page, selector, timeout_ms=CLICK_TIMEOUT, description="Element", alt_selectors=None):
     alt_selectors = alt_selectors or []
     selectors = [selector] + alt_selectors
-    attempts = 4
-    for attempt in range(1, attempts + 1):
+    for attempt in range(4):
         try:
             await ensure_no_overlays(page)
             for sel in selectors:
-                try:
-                    el = await page.wait_for_selector(sel, timeout=timeout_ms)
+                el = await page.query_selector(sel)
+                if el:
                     await el.scroll_into_view_if_needed()
                     await el.click(timeout=timeout_ms)
                     return True
-                except:
-                    pass
             raise Exception(f"Kein Selector klickbar für {description}")
         except Exception as e:
-            if attempt == attempts:
+            if attempt == 3:
                 await send_screenshot(page, f"{description} konnte nicht geklickt werden: {e}")
                 return False
         await asyncio.sleep(0.5)
     return False
 
-
 # ---------------------------
 # Scraping
 # ---------------------------
 async def scrape_stoerungen():
-    browser = None
-    context = None
     try:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
-            context = await browser.new_context(viewport={"width": 1366, "height": 900})
+            browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
+            context = await browser.new_context(viewport={"width": 1024, "height": 768})
             page = await context.new_page()
-            await page.set_extra_http_headers({"Accept-Language": "de-DE,de;q=0.9,en;q=0.8"})
-
             await page.goto("https://strecken-info.de/", timeout=PAGE_LOAD_TIMEOUT)
             await page.wait_for_load_state("networkidle")
-            await asyncio.sleep(1)
             await ensure_no_overlays(page)
 
-            if not await safe_click(page, "button[aria-label='Filter öffnen']", description="Filter öffnen",
-                                    alt_selectors=["button[aria-label='Filter']", "button:has-text('Filter')", "text=Filter"]):
+            if not await safe_click(page, "button[aria-label='Filter öffnen']", description="Filter öffnen"):
+                await context.close()
+                await browser.close()
                 return []
 
-            await ensure_no_overlays(page)
             for label_text in ["Baustellen", "Streckenruhen"]:
-                try:
-                    label = await page.query_selector(f"label:has-text('{label_text}')")
-                    if label:
-                        cb = await label.query_selector("input[type='checkbox']")
-                        if cb and await cb.is_checked():
-                            await cb.click()
-                except:
-                    pass
+                label = await page.query_selector(f"label:has-text('{label_text}')")
+                if label:
+                    cb = await label.query_selector("input[type='checkbox']")
+                    if cb and await cb.is_checked():
+                        await cb.click()
 
-            if not await safe_click(page, "text=Einschränkungen", description="Einschränkungen aktivieren",
-                                    alt_selectors=["button:has-text('Einschränkungen')", "a:has-text('Einschränkungen')"]):
+            if not await safe_click(page, "text=Einschränkungen", description="Einschränkungen aktivieren"):
+                await context.close()
+                await browser.close()
                 return []
-
-            await asyncio.sleep(0.7)
-            await ensure_no_overlays(page)
 
             for i in range(2):
-                await safe_click(page, 'th:has-text("Gültigkeit von")', description=f"Tabelle sortieren Klick {i+1}",
-                                 alt_selectors=["text=Gültigkeit von", "table thead th:nth-last-child(2)"])
+                await safe_click(page, 'th:has-text("Gültigkeit von")', description=f"Tabelle sortieren Klick {i+1}")
                 await asyncio.sleep(0.3)
 
             await page.wait_for_selector("table tbody tr", timeout=20000)
             rows = await page.query_selector_all("table tbody tr")
+            rows = rows[:50]  # Limit für Speicher
+
             stoerungen = []
             for row in rows:
                 try:
@@ -284,15 +253,7 @@ async def scrape_stoerungen():
     except Exception as e:
         print("❌ Fehler beim Scraping:", e)
         traceback.print_exc()
-        try:
-            if context:
-                await context.close()
-            if browser:
-                await browser.close()
-        except:
-            pass
         return []
-
 
 # ---------------------------
 # Haupt-Logik
@@ -345,7 +306,6 @@ async def check_stoerungen():
 
         await asyncio.sleep(600)
 
-
 # ---------------------------
 # Discord Commands & Events
 # ---------------------------
@@ -363,7 +323,6 @@ async def status(ctx):
 async def on_ready():
     print(f"🤖 Bot ready as {bot.user}")
     bot.loop.create_task(check_stoerungen())
-
 
 # ---------------------------
 # Start
