@@ -67,7 +67,7 @@ async def send_screenshot(page, fehlertext="Fehler"):
         if not channel:
             print("⚠️ send_screenshot: Channel nicht gefunden.")
             return
-        screenshot_bytes = await page.screenshot(type="png")  # Kein full_page
+        screenshot_bytes = await page.screenshot(type="png")
         buffer = BytesIO(screenshot_bytes)
         buffer.name = "screenshot.png"
         buffer.seek(0)
@@ -76,26 +76,43 @@ async def send_screenshot(page, fehlertext="Fehler"):
         print("⚠️ Fehler beim Screenshot:", e)
 
 # ---------------------------
-# X-Integration (Playwright)
+# Robuste Klick-Funktion
 # ---------------------------
-async def send_to_x(message: str):
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(storage_state="x_storage.json")
-            page = await context.new_page()
-            await page.goto("https://x.com/compose/tweet")
-            await page.wait_for_selector("div[role='textbox']", timeout=15000)
-            await page.fill("div[role='textbox']", message[:280])
-            await page.click("div[data-testid='tweetButtonInline']")
-            print("✅ Nachricht auf X gepostet:", message[:80])
-            await context.close()
-            await browser.close()
-    except Exception as e:
-        print("❌ Fehler beim Posten auf X:", e)
+async def safe_click(page, selector, timeout_ms=CLICK_TIMEOUT, description="Element", alt_selectors=None, log=False):
+    alt_selectors = alt_selectors or []
+    selectors = [selector] + alt_selectors
+
+    for attempt in range(4):
+        try:
+            await ensure_no_overlays(page)
+
+            for sel in selectors:
+                try:
+                    el = await page.wait_for_selector(sel, timeout=timeout_ms)
+                    if el:
+                        await el.scroll_into_view_if_needed()
+                        if log:
+                            await page.evaluate("(el) => el.style.border = '2px solid red'", el)
+                        await el.click(timeout=timeout_ms)
+                        if log:
+                            print(f"✅ Klick erfolgreich auf: {sel}")
+                        return True
+                except Exception as inner_e:
+                    if log:
+                        print(f"⚠️ Versuch fehlgeschlagen für {sel}: {inner_e}")
+                    continue
+
+            raise Exception(f"Kein Selector klickbar für {description}")
+        except Exception as e:
+            if attempt == 3:
+                await send_screenshot(page, f"{description} konnte nicht geklickt werden: {e}")
+                return False
+        await asyncio.sleep(0.5)
+
+    return False
 
 # ---------------------------
-# Overlay- und Klick-Handling
+# Overlay-Handling
 # ---------------------------
 async def ensure_no_overlays(page, max_wait_ms=OVERLAY_MAX_WAIT):
     start_ts = datetime.now().timestamp()
@@ -145,25 +162,24 @@ async def ensure_no_overlays(page, max_wait_ms=OVERLAY_MAX_WAIT):
             break
         await asyncio.sleep(0.25)
 
-async def safe_click(page, selector, timeout_ms=CLICK_TIMEOUT, description="Element", alt_selectors=None):
-    alt_selectors = alt_selectors or []
-    selectors = [selector] + alt_selectors
-    for attempt in range(4):
-        try:
-            await ensure_no_overlays(page)
-            for sel in selectors:
-                el = await page.query_selector(sel)
-                if el:
-                    await el.scroll_into_view_if_needed()
-                    await el.click(timeout=timeout_ms)
-                    return True
-            raise Exception(f"Kein Selector klickbar für {description}")
-        except Exception as e:
-            if attempt == 3:
-                await send_screenshot(page, f"{description} konnte nicht geklickt werden: {e}")
-                return False
-        await asyncio.sleep(0.5)
-    return False
+# ---------------------------
+# X-Integration
+# ---------------------------
+async def send_to_x(message: str):
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(storage_state="x_storage.json")
+            page = await context.new_page()
+            await page.goto("https://x.com/compose/tweet")
+            await page.wait_for_selector("div[role='textbox']", timeout=15000)
+            await page.fill("div[role='textbox']", message[:280])
+            await page.click("div[data-testid='tweetButtonInline']")
+            print("✅ Nachricht auf X gepostet:", message[:80])
+            await context.close()
+            await browser.close()
+    except Exception as e:
+        print("❌ Fehler beim Posten auf X:", e)
 
 # ---------------------------
 # Scraping
@@ -178,7 +194,16 @@ async def scrape_stoerungen():
             await page.wait_for_load_state("networkidle")
             await ensure_no_overlays(page)
 
-            if not await safe_click(page, "button[aria-label='Filter öffnen']", description="Filter öffnen"):
+            if not await safe_click(
+                page,
+                "button[aria-label='open drawer']",
+                description="Filter öffnen",
+                alt_selectors=[
+                    "button[aria-label='Filter öffnen']",
+                    "button:has(img[alt='Filtereinstellungen'])"
+                ],
+                log=True
+            ):
                 await context.close()
                 await browser.close()
                 return []
@@ -201,7 +226,7 @@ async def scrape_stoerungen():
 
             await page.wait_for_selector("table tbody tr", timeout=20000)
             rows = await page.query_selector_all("table tbody tr")
-            rows = rows[:50]  # Limit für Speicher
+            rows = rows[:50]
 
             stoerungen = []
             for row in rows:
@@ -228,6 +253,7 @@ async def scrape_stoerungen():
 
                     stoerungen.append({
                         "id": id_text,
+                        "gueltig_bis"
                         "gueltig_bis": gueltig_bis_dt,
                         "gueltig_von": gueltig_von,
                         "typ": typ,
@@ -335,3 +361,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("🛑 Bot beendet.")
+
