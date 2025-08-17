@@ -1,4 +1,4 @@
-# bot.py
+# bot.py 
 import os, asyncio, traceback
 from datetime import datetime
 import discord
@@ -120,6 +120,28 @@ async def post_to_x_minimal(message: str):
 def build_x_text(item):
     return f"ID: {item['id']}\nOrt: {item['ort']}\nWirkung: {item['wirkung']}\nUrsache: {item['ursache']}"
 
+# ---------------- Overlay-Handler ----------------
+async def close_overlays(page):
+    """Schließt bekannte Overlays wie Cookie-Banner oder Dialoge."""
+    selectors = [
+        "button:has-text('Ablehnen')",
+        "button:has-text('Alle akzeptieren')",
+        "button:has-text('Alles akzeptieren')",
+        "button[aria-label='Schließen']",
+        "button[aria-label='Close']",
+        "button:has-text('Schließen')",
+        "div[role='dialog'] button:has-text('OK')",
+    ]
+    for sel in selectors:
+        try:
+            btn = await page.query_selector(sel)
+            if btn:
+                await btn.click()
+                await page.wait_for_timeout(500)
+                print(f"✅ Overlay entfernt: {sel}")
+        except Exception:
+            pass
+
 # ---------------- Scraper ----------------
 async def scrape_stoerungen():
     await ensure_playwright_and_browser()
@@ -129,35 +151,48 @@ async def scrape_stoerungen():
     try:
         await page.goto("https://strecken-info.de/", timeout=PAGE_LOAD_TIMEOUT)
 
+        # Overlays schließen
+        await close_overlays(page)
+
         # Filter öffnen
         try:
             await page.click("button:has-text('Filter')", timeout=8000)
-        except: pass
+        except:
+            pass
 
         # Nur „Störungen“ anhaken
         try:
-            cb = await page.wait_for_selector("label:has-text('Störungen') input[type='checkbox']", timeout=5000)
+            cb = await page.wait_for_selector(
+                "label:has-text('Störungen') input[type='checkbox']",
+                timeout=5000
+            )
             if not await cb.is_checked():
                 await cb.click()
-        except: pass
+        except:
+            pass
 
-        # „Einschränkungen“ aktivieren
+        # „Einschränkungen“ Tab aktivieren
         try:
             await page.click("text=Einschränkungen", timeout=8000)
-        except: pass
+        except:
+            pass
 
-        # Sortieren
+        # Tabelle sortieren nach "Gültigkeit von"
         for _ in range(2):
             try:
                 await page.click('th:has-text("Gültigkeit von")', timeout=6000)
-            except: break
+            except:
+                break
 
-        await page.wait_for_selector("table tbody tr", timeout=20000)
+        # Tabelle abwarten
+        await page.wait_for_selector("table tbody tr", timeout=30000)
+
         rows = await page.query_selector_all("table tbody tr")
         for row in rows:
             try:
                 cols = await row.query_selector_all("td")
-                if len(cols) < 8: continue
+                if len(cols) < 8:
+                    continue
                 id_text     = (await cols[0].inner_text()).strip()
                 typ         = (await cols[1].inner_text()).strip()
                 ort         = (await cols[2].inner_text()).strip()
@@ -166,9 +201,15 @@ async def scrape_stoerungen():
                 ursache     = (await cols[5].inner_text()).strip()
                 gueltig_von = (await cols[6].inner_text()).strip()
                 gueltig_bis = (await cols[7].inner_text()).strip()
-                if typ.lower() in ("baustelle", "streckenruhe"): continue
-                try: gb_dt = datetime.strptime(gueltig_bis, "%d.%m.%Y %H:%M")
-                except: gb_dt = None
+
+                if typ.lower() in ("baustelle", "streckenruhe"):
+                    continue
+
+                try:
+                    gb_dt = datetime.strptime(gueltig_bis, "%d.%m.%Y %H:%M")
+                except:
+                    gb_dt = None
+
                 stoerungen.append({
                     "id": id_text, "typ": typ, "ort": ort, "region": region,
                     "wirkung": wirkung, "ursache": ursache,
@@ -180,7 +221,8 @@ async def scrape_stoerungen():
                         f"⏰ {gueltig_von} → {gueltig_bis}"
                     )
                 })
-            except: continue
+            except:
+                continue
     except Exception as e:
         print("❌ Fehler beim Scraping:", e)
         traceback.print_exc()
