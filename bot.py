@@ -129,6 +129,26 @@ def build_x_text(item):
     return f"ID: {item['id']}\nOrt: {item['ort']}\nWirkung: {item['wirkung']}\nUrsache: {item['ursache']}"
 
 # ---------------- Scraper ----------------
+async def close_overlays(page):
+    """Schließt Popups/Overlays falls vorhanden"""
+    try:
+        # Cookie Banner
+        await page.click("button:has-text('Alle akzeptieren')", timeout=3000)
+        print("✅ Cookie-Banner entfernt")
+    except: pass
+
+    # Generische Buttons
+    for sel in ["button:has-text('OK')",
+                "button:has-text('Schließen')",
+                "button:has-text('Verstanden')",
+                "text=Weiter"]:
+        try:
+            btn = await page.wait_for_selector(sel, timeout=2000)
+            await btn.click()
+            print(f"✅ Overlay entfernt mit {sel}")
+        except:
+            pass
+
 async def scrape_stoerungen():
     await ensure_playwright_and_browser()
     context = await _browser.new_context(viewport={"width": 1280, "height": 800})
@@ -136,6 +156,7 @@ async def scrape_stoerungen():
     stoerungen = []
     try:
         await page.goto("https://strecken-info.de/", timeout=PAGE_LOAD_TIMEOUT)
+        await close_overlays(page)
 
         # Filter öffnen
         try:
