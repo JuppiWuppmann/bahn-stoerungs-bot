@@ -156,31 +156,52 @@ async def scrape_stoerungen():
     stoerungen = []
     try:
         await page.goto("https://strecken-info.de/", timeout=PAGE_LOAD_TIMEOUT)
-        await close_overlays(page)
+
+        # Popups/Overlays wegklicken (statt close_overlays(page))
+        try:
+            # Cookie-Banner
+            if await page.is_visible("button:has-text('Alle akzeptieren')"):
+                await page.click("button:has-text('Alle akzeptieren')")
+                print("✅ Cookie-Banner akzeptiert")
+
+            # Hinweis/Overlay schließen
+            overlays = await page.query_selector_all("button:has-text('Schließen'), button:has-text('OK')")
+            for btn in overlays:
+                try:
+                    await btn.click(timeout=2000)
+                    print("✅ Overlay geschlossen")
+                except:
+                    pass
+        except Exception as e:
+            print("ℹ️ Kein Overlay gefunden oder Fehler beim Schließen:", e)
 
         # Filter öffnen
         try:
             await page.click("button:has-text('Filter')", timeout=8000)
-        except: pass
+        except:
+            pass
 
         # Nur „Störungen“ anhaken
         try:
             cb = await page.wait_for_selector("label:has-text('Störungen') input[type='checkbox']", timeout=5000)
             if not await cb.is_checked():
                 await cb.click()
-        except: pass
+        except:
+            pass
 
         # „Einschränkungen“ aktivieren
         try:
             await page.click("text=Einschränkungen", timeout=8000)
-        except: pass
+        except:
+            pass
 
         await page.wait_for_selector("table tbody tr", timeout=20000)
         rows = await page.query_selector_all("table tbody tr")
         for row in rows:
             try:
                 cols = await row.query_selector_all("td")
-                if len(cols) < 8: continue
+                if len(cols) < 8:
+                    continue
                 id_text     = (await cols[0].inner_text()).strip()
                 typ         = (await cols[1].inner_text()).strip()
                 ort         = (await cols[2].inner_text()).strip()
@@ -189,7 +210,8 @@ async def scrape_stoerungen():
                 ursache     = (await cols[5].inner_text()).strip()
                 gueltig_von = (await cols[6].inner_text()).strip()
                 gueltig_bis = (await cols[7].inner_text()).strip()
-                if typ.lower() in ("baustelle", "streckenruhe"): continue
+                if typ.lower() in ("baustelle", "streckenruhe"):
+                    continue
                 try:
                     gv_dt = datetime.strptime(gueltig_von, "%d.%m.%Y %H:%M")
                 except:
@@ -209,7 +231,8 @@ async def scrape_stoerungen():
                         f"⏰ {gueltig_von} → {gueltig_bis}"
                     )
                 })
-            except: continue
+            except:
+                continue
 
         # Lokale Sortierung nach "gueltig_von" (neueste zuerst)
         stoerungen.sort(key=lambda x: x["gueltig_von"] or datetime.min, reverse=True)
