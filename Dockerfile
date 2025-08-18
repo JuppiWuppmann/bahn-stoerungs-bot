@@ -18,5 +18,4 @@ RUN python -m playwright install chromium
 
 COPY . .
 
-# Statt bot.py jetzt keepalive.py starten
-CMD ["python", "keepalive.py"]
+CMD ["python", "bot.py"]
