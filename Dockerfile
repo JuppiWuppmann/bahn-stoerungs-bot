@@ -13,9 +13,10 @@ RUN apt-get update && apt-get install -y \
     fonts-unifont fonts-dejavu fonts-liberation \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Nur Chromium-Browser über Playwright installieren (ohne kaputtes --with-deps)
+# Nur Chromium-Browser über Playwright installieren
 RUN python -m playwright install chromium
 
 COPY . .
 
-CMD ["python", "bot.py"]
+# Statt bot.py jetzt keepalive.py starten
+CMD ["python", "keepalive.py"]
