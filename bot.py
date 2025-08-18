@@ -5,6 +5,7 @@ import discord
 from discord.ext import commands
 from aiohttp import web
 from playwright.async_api import async_playwright
+from keepalive import keep_alive
 
 # ---------- ENV ----------
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
