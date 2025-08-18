@@ -1,19 +1,20 @@
-import asyncio
-import threading
 from flask import Flask
-from bot import main  # Dein Bot-Einstiegspunkt
+import threading
 
-app = Flask(__name__)
+app = Flask('')
 
-@app.route("/")
+@app.route('/')
 def home():
-    return "🚂 Bahn-Störungs-Bot läuft auf Render!"
+    return "I'm alive!"
 
-def run_bot():
-    asyncio.run(main())
+@app.route('/health')
+def health():
+    return "OK", 200
 
-if __name__ == "__main__":
-    # Bot startet in separatem Thread
-    threading.Thread(target=run_bot, daemon=True).start()
-    # Dummy-Webserver für Render
-    app.run(host="0.0.0.0", port=10000)
+def run():
+    # Render erwartet, dass dein Service auf 0.0.0.0:8080 läuft
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = threading.Thread(target=run)
+    t.start()
