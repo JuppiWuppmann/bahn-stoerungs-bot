@@ -1,4 +1,4 @@
-# bot.py 
+# bot.py
 import os, asyncio, traceback
 from datetime import datetime
 import discord
@@ -71,7 +71,7 @@ async def init_x_context():
             _x_context = await _browser.new_context()
             page = await _x_context.new_page()
             await page.goto("https://x.com/login", timeout=60000)
-            await page.fill('input[name="text"]', X_USERNAME)
+            await page.fill('input[name="username"]', X_USERNAME)
             await page.keyboard.press("Enter")
             await page.wait_for_timeout(1200)
             await page.fill('input[name="password"]', X_PASSWORD)
@@ -129,26 +129,6 @@ def build_x_text(item):
     return f"ID: {item['id']}\nOrt: {item['ort']}\nWirkung: {item['wirkung']}\nUrsache: {item['ursache']}"
 
 # ---------------- Scraper ----------------
-async def close_overlays(page):
-    """Schließt Popups/Overlays falls vorhanden"""
-    try:
-        # Cookie Banner
-        await page.click("button:has-text('Alle akzeptieren')", timeout=3000)
-        print("✅ Cookie-Banner entfernt")
-    except: pass
-
-    # Generische Buttons
-    for sel in ["button:has-text('OK')",
-                "button:has-text('Schließen')",
-                "button:has-text('Verstanden')",
-                "text=Weiter"]:
-        try:
-            btn = await page.wait_for_selector(sel, timeout=2000)
-            await btn.click()
-            print(f"✅ Overlay entfernt mit {sel}")
-        except:
-            pass
-
 async def scrape_stoerungen():
     await ensure_playwright_and_browser()
     context = await _browser.new_context(viewport={"width": 1280, "height": 800})
@@ -157,51 +137,60 @@ async def scrape_stoerungen():
     try:
         await page.goto("https://strecken-info.de/", timeout=PAGE_LOAD_TIMEOUT)
 
-        # Popups/Overlays wegklicken (statt close_overlays(page))
-        try:
-            # Cookie-Banner
-            if await page.is_visible("button:has-text('Alle akzeptieren')"):
-                await page.click("button:has-text('Alle akzeptieren')")
-                print("✅ Cookie-Banner akzeptiert")
+        # Screenshot und HTML speichern
+        await page.screenshot(path="debug_page.png", full_page=True)
+        print("📸 Screenshot gespeichert: debug_page.png")
+        html = await page.content()
+        with open("debug.html", "w", encoding="utf-8") as f:
+            f.write(html)
+        print("📄 HTML gespeichert: debug.html")
 
-            # Hinweis/Overlay schließen
-            overlays = await page.query_selector_all("button:has-text('Schließen'), button:has-text('OK')")
-            for btn in overlays:
-                try:
-                    await btn.click(timeout=2000)
-                    print("✅ Overlay geschlossen")
-                except:
-                    pass
-        except Exception as e:
-            print("ℹ️ Kein Overlay gefunden oder Fehler beim Schließen:", e)
+        # Overlay schließen, wenn vorhanden
+        try:
+            btn = await page.query_selector("button:has-text('OK')")
+            if btn: 
+                await btn.click()
+                print("ℹ️ Overlay geschlossen")
+        except: pass
 
         # Filter öffnen
         try:
             await page.click("button:has-text('Filter')", timeout=8000)
-        except:
-            pass
+            print("✅ Filter geöffnet")
+        except: print("⚠️ Filter-Button nicht gefunden")
 
         # Nur „Störungen“ anhaken
         try:
             cb = await page.wait_for_selector("label:has-text('Störungen') input[type='checkbox']", timeout=5000)
             if not await cb.is_checked():
                 await cb.click()
-        except:
-            pass
+                print("✅ Checkbox 'Störungen' angehakt")
+        except: print("⚠️ Checkbox 'Störungen' nicht gefunden")
 
         # „Einschränkungen“ aktivieren
         try:
             await page.click("text=Einschränkungen", timeout=8000)
-        except:
-            pass
+            print("✅ Tab 'Einschränkungen' aktiviert")
+        except: print("⚠️ Tab 'Einschränkungen' nicht gefunden")
 
-        await page.wait_for_selector("table tbody tr", timeout=20000)
-        rows = await page.query_selector_all("table tbody tr")
+        # Statt starrem Wait: Schleife
+        rows = []
+        for i in range(6):  # bis zu 60s
+            rows = await page.query_selector_all("table tbody tr")
+            if rows:
+                print(f"✅ {len(rows)} Zeilen gefunden")
+                break
+            print(f"⏳ Noch keine Tabelle, Versuch {i+1}")
+            await asyncio.sleep(10)
+
+        if not rows:
+            print("❌ Keine Tabelle gefunden – evtl. Struktur anders?")
+            return []
+
         for row in rows:
             try:
                 cols = await row.query_selector_all("td")
-                if len(cols) < 8:
-                    continue
+                if len(cols) < 8: continue
                 id_text     = (await cols[0].inner_text()).strip()
                 typ         = (await cols[1].inner_text()).strip()
                 ort         = (await cols[2].inner_text()).strip()
@@ -210,16 +199,11 @@ async def scrape_stoerungen():
                 ursache     = (await cols[5].inner_text()).strip()
                 gueltig_von = (await cols[6].inner_text()).strip()
                 gueltig_bis = (await cols[7].inner_text()).strip()
-                if typ.lower() in ("baustelle", "streckenruhe"):
-                    continue
-                try:
-                    gv_dt = datetime.strptime(gueltig_von, "%d.%m.%Y %H:%M")
-                except:
-                    gv_dt = None
-                try:
-                    gb_dt = datetime.strptime(gueltig_bis, "%d.%m.%Y %H:%M")
-                except:
-                    gb_dt = None
+                if typ.lower() in ("baustelle", "streckenruhe"): continue
+                try: gv_dt = datetime.strptime(gueltig_von, "%d.%m.%Y %H:%M")
+                except: gv_dt = None
+                try: gb_dt = datetime.strptime(gueltig_bis, "%d.%m.%Y %H:%M")
+                except: gb_dt = None
                 stoerungen.append({
                     "id": id_text, "typ": typ, "ort": ort, "region": region,
                     "wirkung": wirkung, "ursache": ursache,
@@ -231,10 +215,8 @@ async def scrape_stoerungen():
                         f"⏰ {gueltig_von} → {gueltig_bis}"
                     )
                 })
-            except:
-                continue
+            except: continue
 
-        # Lokale Sortierung nach "gueltig_von" (neueste zuerst)
         stoerungen.sort(key=lambda x: x["gueltig_von"] or datetime.min, reverse=True)
 
     except Exception as e:
@@ -259,7 +241,6 @@ async def check_stoerungen():
             current_ids = {s["id"] for s in stoerungen}
             channel = bot.get_channel(CHANNEL_ID)
 
-            # Beendete
             for sid, d in list(last_stoerungen.items()):
                 ended = sid not in current_ids or (d["gueltig_bis"] and d["gueltig_bis"] < datetime.now())
                 if ended:
@@ -270,7 +251,6 @@ async def check_stoerungen():
                     }))
                     del last_stoerungen[sid]
 
-            # Neue
             for s in stoerungen:
                 if s["id"] not in last_stoerungen:
                     last_stoerungen[s["id"]] = s
