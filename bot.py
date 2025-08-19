@@ -53,10 +53,9 @@ async def ensure_playwright_and_browser():
     if _browser:
         return
     _pw = await async_playwright().start()
-    _browser = await _pw.chromium.launch(
-        headless=True,
-        args=["--no-sandbox", "--disable-dev-shm-usage",
-              "--disable-gpu", "--blink-settings=imagesEnabled=false"]
+        _browser = await _pw.chromium.launch(
+        headless=False,  # Sichtbar für Debugging
+        args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--blink-settings=imagesEnabled=false"]
     )
 
 # ---------------- X: Login + Post ----------------
@@ -176,16 +175,18 @@ async def scrape_stoerungen():
 
         # Statt starrem Wait: Schleife
         rows = []
-        for i in range(6):  # bis zu 60s
+        # Nach Filterauswahl: Warte auf Tabelle mit max. 30s
+        for i in range(6):
             rows = await page.query_selector_all("table tbody tr")
             if rows:
-                print(f"✅ {len(rows)} Zeilen gefunden")
+                print(f"✅ Tabelle geladen mit {len(rows)} Zeilen")
                 break
-            print(f"⏳ Noch keine Tabelle, Versuch {i+1}")
-            await asyncio.sleep(10)
+            print(f"⏳ Tabelle noch nicht da – Versuch {i+1}")
+            await asyncio.sleep(5)
 
         if not rows:
-            print("❌ Keine Tabelle gefunden – evtl. Struktur anders?")
+            await page.screenshot(path="error_table.png")
+            print("❌ Tabelle nicht gefunden – Screenshot gespeichert")
             return []
 
         for row in rows:
