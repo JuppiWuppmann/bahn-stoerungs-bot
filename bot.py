@@ -53,7 +53,7 @@ async def ensure_playwright_and_browser():
     if _browser:
         return
     _pw = await async_playwright().start()
-        _browser = await _pw.chromium.launch(
+    _browser = await _pw.chromium.launch(
         headless=False,  # Sichtbar für Debugging
         args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--blink-settings=imagesEnabled=false"]
     )
