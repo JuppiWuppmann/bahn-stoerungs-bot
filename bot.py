@@ -1,4 +1,3 @@
-# bot.py
 import os, asyncio, traceback
 from datetime import datetime
 import discord
@@ -54,7 +53,7 @@ async def ensure_playwright_and_browser():
         return
     _pw = await async_playwright().start()
     _browser = await _pw.chromium.launch(
-        headless=False,  # Sichtbar für Debugging
+        headless=True,
         args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--blink-settings=imagesEnabled=false"]
     )
 
@@ -116,14 +115,6 @@ async def post_to_x_minimal(message: str):
         await page.close()
     except Exception as e:
         print("❌ Fehler bei X:", e)
-        try:
-            await page.screenshot(path="x_error.png")
-            print("📸 Screenshot gespeichert: x_error.png")
-        except:
-            pass
-        channel = bot.get_channel(CHANNEL_ID)
-        if channel:
-            await safe_send_to_channel(channel, f"⚠️ X-Post fehlgeschlagen: {e}")
 
 def build_x_text(item):
     return f"ID: {item['id']}\nOrt: {item['ort']}\nWirkung: {item['wirkung']}\nUrsache: {item['ursache']}"
@@ -137,57 +128,35 @@ async def scrape_stoerungen():
     try:
         await page.goto("https://strecken-info.de/", timeout=PAGE_LOAD_TIMEOUT)
 
-        # Screenshot und HTML speichern
-        await page.screenshot(path="debug_page.png", full_page=True)
-        print("📸 Screenshot gespeichert: debug_page.png")
-        html = await page.content()
-        with open("debug.html", "w", encoding="utf-8") as f:
-            f.write(html)
-        print("📄 HTML gespeichert: debug.html")
-
-        # Overlay schließen, wenn vorhanden
+        # Overlay schließen
         try:
             btn = await page.query_selector("button:has-text('OK')")
-            if btn: 
-                await btn.click()
-                print("ℹ️ Overlay geschlossen")
+            if btn: await btn.click()
         except: pass
 
         # Filter öffnen
         try:
             await page.click("button:has-text('Filter')", timeout=8000)
-            print("✅ Filter geöffnet")
-        except: print("⚠️ Filter-Button nicht gefunden")
+        except: pass
 
         # Nur „Störungen“ anhaken
         try:
             cb = await page.wait_for_selector("label:has-text('Störungen') input[type='checkbox']", timeout=5000)
             if not await cb.is_checked():
                 await cb.click()
-                print("✅ Checkbox 'Störungen' angehakt")
-        except: print("⚠️ Checkbox 'Störungen' nicht gefunden")
+        except: pass
 
         # „Einschränkungen“ aktivieren
         try:
             await page.click("text=Einschränkungen", timeout=8000)
-            print("✅ Tab 'Einschränkungen' aktiviert")
-        except: print("⚠️ Tab 'Einschränkungen' nicht gefunden")
+        except: pass
 
-        # Statt starrem Wait: Schleife
+        # Tabelle laden
         rows = []
-        # Nach Filterauswahl: Warte auf Tabelle mit max. 30s
         for i in range(6):
             rows = await page.query_selector_all("table tbody tr")
-            if rows:
-                print(f"✅ Tabelle geladen mit {len(rows)} Zeilen")
-                break
-            print(f"⏳ Tabelle noch nicht da – Versuch {i+1}")
+            if rows: break
             await asyncio.sleep(5)
-
-        if not rows:
-            await page.screenshot(path="error_table.png")
-            print("❌ Tabelle nicht gefunden – Screenshot gespeichert")
-            return []
 
         for row in rows:
             try:
@@ -245,18 +214,16 @@ async def check_stoerungen():
             current_ids = {s["id"] for s in stoerungen}
             channel = bot.get_channel(CHANNEL_ID)
 
-            # --- Störungen, die behoben wurden ---
+            # Behobene Störungen
             for sid, d in list(last_stoerungen.items()):
                 ended = sid not in current_ids or (d["gueltig_bis"] and d["gueltig_bis"] < datetime.now())
                 if ended:
                     if channel:
                         await safe_send_to_channel(channel, f"✅ Behoben: {sid} in {d['ort']}")
-                    await post_to_x_minimal(build_x_text({
-                        "id": sid, "ort": d["ort"], "wirkung": d["wirkung"], "ursache": d["ursache"]
-                    }))
+                    await post_to_x_minimal(f"✅ Behoben\n{build_x_text(d)}")
                     del last_stoerungen[sid]
 
-            # --- Neue Störungen ---
+            # Neue Störungen
             for s in stoerungen:
                 if s["id"] not in last_stoerungen:
                     last_stoerungen[s["id"]] = s
@@ -268,8 +235,7 @@ async def check_stoerungen():
             print("⚠️ Loop-Fehler:", e)
             traceback.print_exc()
 
-        # alle 10 Minuten prüfen
-        await asyncio.sleep(600)
+        await asyncio.sleep(600)  # alle 10 Minuten
 
 # ---------------- Commands ----------------
 @bot.command()
