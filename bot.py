@@ -93,26 +93,52 @@ def _chunk_for_x(text, limit=280):
     return parts
 
 async def post_to_x_minimal(message: str):
-    if not POST_TO_X: return
-    if not _x_context: await init_x_context()
-    if not _x_context: return
+    if not POST_TO_X:
+        return
+    if not _x_context:
+        await init_x_context()
+    if not _x_context:
+        return
+
     try:
+        chunks = _chunk_for_x(message)
+
+        # ersten Tweet posten
         page = await _x_context.new_page()
         await page.goto("https://x.com/compose/tweet", timeout=60000)
         tb = await page.wait_for_selector('div[role="textbox"]', timeout=10000)
-        chunks = _chunk_for_x(message)
         await tb.click()
         await page.keyboard.type(chunks[0])
-        for extra in chunks[1:]:
-            try:
-                add_btn = await page.wait_for_selector('div[data-testid="addButton"]', timeout=4000)
-                await add_btn.click()
-            except: pass
-            await page.keyboard.type("\n\n" + extra)
+
         btn = await page.wait_for_selector('div[data-testid="tweetButton"]', timeout=5000)
         await btn.click()
-        await page.wait_for_timeout(1200)
+        await page.wait_for_timeout(2000)
+
+        # URL des ersten Tweets holen
+        await page.wait_for_selector("article", timeout=10000)
+        first_tweet = page.url
         await page.close()
+
+        # alle weiteren Chunks als Antworten posten
+        reply_url = first_tweet
+        for extra in chunks[1:]:
+            page = await _x_context.new_page()
+            await page.goto(reply_url, timeout=60000)
+
+            # Reply-Feld finden
+            tb = await page.wait_for_selector('div[role="textbox"]', timeout=10000)
+            await tb.click()
+            await page.keyboard.type(extra)
+
+            btn = await page.wait_for_selector('div[data-testid="tweetButton"]', timeout=5000)
+            await btn.click()
+            await page.wait_for_timeout(2000)
+
+            reply_url = page.url  # für nächsten Antwortschritt
+            await page.close()
+
+        print(f"✅ Thread mit {len(chunks)} Tweets gepostet")
+
     except Exception as e:
         print("❌ Fehler bei X:", e)
 
