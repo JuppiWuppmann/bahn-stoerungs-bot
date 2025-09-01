@@ -315,7 +315,7 @@ async def status(ctx):
 # ---------- Main ----------
 async def main():
     await start_web_server()
-    await bot.start(DISCORD_TOKEN)
+    await bot.run(DISCORD_TOKEN)
 
 if __name__ == "__main__":
     try:
