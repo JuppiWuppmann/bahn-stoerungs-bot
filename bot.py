@@ -55,6 +55,7 @@ async def ensure_playwright_and_browser():
         headless=True,
         args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--blink-settings=imagesEnabled=false"]
     )
+    print("✅ Browser gestartet")
 
 # ---------------- X: Login + Post ----------------
 async def init_x_context():
@@ -111,11 +112,12 @@ async def post_to_x_minimal(message: str):
 
         btn = await page.wait_for_selector('div[data-testid="tweetButton"]', timeout=5000)
         await btn.click()
-        await page.wait_for_timeout(2000)
+        await page.wait_for_timeout(3000)
 
-        # URL des ersten Tweets holen
-        await page.wait_for_selector("article", timeout=10000)
-        first_tweet = page.url
+        # Permalink des ersten Tweets holen
+        await page.wait_for_selector("article a[href*='/status/']", timeout=10000)
+        tweet_link = await page.get_attribute("article a[href*='/status/']", "href")
+        first_tweet = "https://x.com" + tweet_link
         await page.close()
 
         # alle weiteren Chunks als Antworten posten
@@ -123,17 +125,17 @@ async def post_to_x_minimal(message: str):
         for extra in chunks[1:]:
             page = await _x_context.new_page()
             await page.goto(reply_url, timeout=60000)
-
-            # Reply-Feld finden
             tb = await page.wait_for_selector('div[role="textbox"]', timeout=10000)
             await tb.click()
             await page.keyboard.type(extra)
 
             btn = await page.wait_for_selector('div[data-testid="tweetButton"]', timeout=5000)
             await btn.click()
-            await page.wait_for_timeout(2000)
+            await page.wait_for_timeout(3000)
 
-            reply_url = page.url  # für nächsten Antwortschritt
+            await page.wait_for_selector("article a[href*='/status/']", timeout=10000)
+            reply_link = await page.get_attribute("article a[href*='/status/']", "href")
+            reply_url = "https://x.com" + reply_link
             await page.close()
 
         print(f"✅ Thread mit {len(chunks)} Tweets gepostet")
@@ -151,6 +153,7 @@ async def scrape_stoerungen():
     page = await context.new_page()
     stoerungen = []
     try:
+        print("🌐 Rufe strecken-info.de auf...")
         await page.goto("https://strecken-info.de/", timeout=PAGE_LOAD_TIMEOUT)
 
         # Overlay schließen
@@ -182,6 +185,8 @@ async def scrape_stoerungen():
             rows = await page.query_selector_all("table tbody tr")
             if rows: break
             await asyncio.sleep(5)
+
+        print(f"📊 {len(rows)} Zeilen in der Tabelle gefunden")
 
         for row in rows:
             try:
@@ -234,7 +239,9 @@ async def check_stoerungen():
     global last_stoerungen, last_check_time
     while not bot.is_closed():
         try:
+            print("🔍 Starte Scraping...")
             stoerungen = await scrape_stoerungen()
+            print(f"📊 {len(stoerungen)} Störungen gefunden")
             last_check_time = datetime.now()
             current_ids = {s["id"] for s in stoerungen}
             channel = bot.get_channel(CHANNEL_ID)
@@ -243,6 +250,7 @@ async def check_stoerungen():
             for sid, d in list(last_stoerungen.items()):
                 ended = sid not in current_ids or (d["gueltig_bis"] and d["gueltig_bis"] < datetime.now())
                 if ended:
+                    print(f"✅ Behoben: {sid}")
                     if channel:
                         await safe_send_to_channel(channel, f"✅ Behoben: {sid} in {d['ort']}")
                     await post_to_x_minimal(f"✅ Behoben\n{build_x_text(d)}")
@@ -251,6 +259,7 @@ async def check_stoerungen():
             # Neue Störungen
             for s in stoerungen:
                 if s["id"] not in last_stoerungen:
+                    print(f"🚨 Neue Störung: {s['id']}")
                     last_stoerungen[s["id"]] = s
                     if channel:
                         await safe_send_to_channel(channel, s["discord_text"])
@@ -260,7 +269,8 @@ async def check_stoerungen():
             print("⚠️ Loop-Fehler:", e)
             traceback.print_exc()
 
-        await asyncio.sleep(600)  # alle 10 Minuten
+        print("⏳ Warte 10 Minuten...")
+        await asyncio.sleep(600)
 
 # ---------------- Commands ----------------
 @bot.command()
