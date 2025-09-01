@@ -231,8 +231,10 @@ async def scrape_stoerungen():
 
 # ---------------- Notify-Loop ----------------
 async def safe_send_to_channel(channel, content):
-    try: await channel.send(content)
-    except Exception as e: print("❌ Discord-Sendefehler:", e)
+    try:
+        await channel.send(content)
+    except Exception as e:
+        print("❌ Discord-Sendefehler:", e)
 
 async def check_stoerungen():
     global last_stoerungen, last_check_time
@@ -243,6 +245,7 @@ async def check_stoerungen():
             current_ids = {s["id"] for s in stoerungen}
             channel = bot.get_channel(CHANNEL_ID)
 
+            # --- Störungen, die behoben wurden ---
             for sid, d in list(last_stoerungen.items()):
                 ended = sid not in current_ids or (d["gueltig_bis"] and d["gueltig_bis"] < datetime.now())
                 if ended:
@@ -253,14 +256,19 @@ async def check_stoerungen():
                     }))
                     del last_stoerungen[sid]
 
+            # --- Neue Störungen ---
             for s in stoerungen:
                 if s["id"] not in last_stoerungen:
                     last_stoerungen[s["id"]] = s
-                    if channel: await safe_send_to_channel(channel, s["discord_text"])
+                    if channel:
+                        await safe_send_to_channel(channel, s["discord_text"])
                     await post_to_x_minimal(build_x_text(s))
+
         except Exception as e:
             print("⚠️ Loop-Fehler:", e)
             traceback.print_exc()
+
+        # alle 10 Minuten prüfen
         await asyncio.sleep(600)
 
 # ---------------- Commands ----------------
