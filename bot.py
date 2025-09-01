@@ -30,7 +30,7 @@ _pw = None
 _browser = None
 _x_context = None
 
-# ---------------- Healthcheck (Render) ----------------
+# ---------------- Healthcheck ----------------
 async def handle_health(_):
     return web.Response(text="OK")
 
@@ -102,25 +102,19 @@ async def post_to_x_minimal(message: str):
 
     try:
         chunks = _chunk_for_x(message)
-
-        # ersten Tweet posten
         page = await _x_context.new_page()
         await page.goto("https://x.com/compose/tweet", timeout=60000)
         tb = await page.wait_for_selector('div[role="textbox"]', timeout=10000)
         await tb.click()
         await page.keyboard.type(chunks[0])
-
         btn = await page.wait_for_selector('div[data-testid="tweetButton"]', timeout=5000)
         await btn.click()
         await page.wait_for_timeout(3000)
-
-        # Permalink des ersten Tweets holen
         await page.wait_for_selector("article a[href*='/status/']", timeout=10000)
         tweet_link = await page.get_attribute("article a[href*='/status/']", "href")
         first_tweet = "https://x.com" + tweet_link
         await page.close()
 
-        # alle weiteren Chunks als Antworten posten
         reply_url = first_tweet
         for extra in chunks[1:]:
             page = await _x_context.new_page()
@@ -128,18 +122,15 @@ async def post_to_x_minimal(message: str):
             tb = await page.wait_for_selector('div[role="textbox"]', timeout=10000)
             await tb.click()
             await page.keyboard.type(extra)
-
             btn = await page.wait_for_selector('div[data-testid="tweetButton"]', timeout=5000)
             await btn.click()
             await page.wait_for_timeout(3000)
-
             await page.wait_for_selector("article a[href*='/status/']", timeout=10000)
             reply_link = await page.get_attribute("article a[href*='/status/']", "href")
             reply_url = "https://x.com" + reply_link
             await page.close()
 
         print(f"✅ Thread mit {len(chunks)} Tweets gepostet")
-
     except Exception as e:
         print("❌ Fehler bei X:", e)
 
@@ -155,31 +146,22 @@ async def scrape_stoerungen():
     try:
         print("🌐 Rufe strecken-info.de auf...")
         await page.goto("https://strecken-info.de/", timeout=PAGE_LOAD_TIMEOUT)
-
-        # Overlay schließen
         try:
             btn = await page.query_selector("button:has-text('OK')")
             if btn: await btn.click()
         except: pass
-
-        # Filter öffnen
         try:
             await page.click("button:has-text('Filter')", timeout=8000)
         except: pass
-
-        # Nur „Störungen“ anhaken
         try:
             cb = await page.wait_for_selector("label:has-text('Störungen') input[type='checkbox']", timeout=5000)
             if not await cb.is_checked():
                 await cb.click()
         except: pass
-
-        # „Einschränkungen“ aktivieren
         try:
             await page.click("text=Einschränkungen", timeout=8000)
         except: pass
 
-        # Tabelle laden
         rows = []
         for i in range(6):
             rows = await page.query_selector_all("table tbody tr")
@@ -219,7 +201,6 @@ async def scrape_stoerungen():
             except: continue
 
         stoerungen.sort(key=lambda x: x["gueltig_von"] or datetime.min, reverse=True)
-
     except Exception as e:
         print("❌ Fehler beim Scraping:", e)
         traceback.print_exc()
@@ -228,7 +209,7 @@ async def scrape_stoerungen():
         await context.close()
     return stoerungen
 
-# ---------------- Notify-Loop ----------------
+# ---------------- Notify-Loop (Fortsetzung) ----------------
 async def safe_send_to_channel(channel, content):
     try:
         await channel.send(content)
@@ -245,6 +226,7 @@ async def check_stoerungen():
             last_check_time = datetime.now()
             current_ids = {s["id"] for s in stoerungen}
             channel = bot.get_channel(CHANNEL_ID)
+            print(f"🧪 Channel: {channel}")
 
             # Behobene Störungen
             for sid, d in list(last_stoerungen.items()):
@@ -282,16 +264,23 @@ async def status(ctx):
     else:
         await ctx.send("⏳ Noch keine Prüfung.")
 
+# ---------------- Events ----------------
 @bot.event
 async def on_ready():
+    print("🚀 on_ready() wurde aufgerufen")
     print(f"🤖 Bot ready as {bot.user}")
-    if POST_TO_X: await init_x_context()
-    bot.loop.create_task(check_stoerungen())
+    if POST_TO_X:
+        print("🔧 Initialisiere X-Session...")
+        await init_x_context()
 
 # ---------------- Main ----------------
 async def main():
-    await asyncio.gather(start_web_server(), bot.start(DISCORD_TOKEN))
+    await start_web_server()
+    bot.loop.create_task(check_stoerungen())  # Notify-Loop direkt starten
+    await bot.start(DISCORD_TOKEN)
 
 if __name__ == "__main__":
-    try: asyncio.run(main())
-    except KeyboardInterrupt: print("🛑 Bot beendet.")
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("🛑 Bot beendet.")
