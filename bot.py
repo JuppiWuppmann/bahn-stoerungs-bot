@@ -154,34 +154,67 @@ async def scrape_stoerungen():
     try:
         print("🌐 Rufe strecken-info.de auf...")
         await page.goto("https://strecken-info.de/", timeout=PAGE_LOAD_TIMEOUT)
+
+        # Warten auf sichtbare Seite
         try:
-            btn = await page.query_selector("button:has-text('OK')")
-            if btn: await btn.click()
-        except: pass
+            await page.wait_for_selector("button:has-text('Filter')", timeout=10000)
+            print("✅ Seite vollständig geladen")
+        except:
+            print("⚠️ Filter-Button nicht gefunden – Seite evtl. nicht geladen")
+
+        # Overlay oder Cookie-Banner schließen
+        for text in ["OK", "Verstanden", "Schließen"]:
+            try:
+                btn = await page.query_selector(f"button:has-text('{text}')")
+                if btn:
+                    await btn.click()
+                    print(f"✅ Overlay mit '{text}' geschlossen")
+                    break
+            except:
+                pass
+
+        # Filter öffnen
         try:
             await page.click("button:has-text('Filter')", timeout=8000)
-        except: pass
+            print("✅ Filter geöffnet")
+        except:
+            print("⚠️ Filter konnte nicht geöffnet werden")
+
+        # Checkbox „Störungen“ aktivieren
         try:
             cb = await page.wait_for_selector("label:has-text('Störungen') input[type='checkbox']", timeout=5000)
             if not await cb.is_checked():
                 await cb.click()
-        except: pass
+                print("✅ Checkbox 'Störungen' aktiviert")
+        except:
+            print("⚠️ Checkbox 'Störungen' nicht gefunden")
+
+        # Einschränkungen aktivieren
         try:
             await page.click("text=Einschränkungen", timeout=8000)
-        except: pass
+            print("✅ Einschränkungen aktiviert")
+        except:
+            print("⚠️ Einschränkungen nicht klickbar")
 
+        # Tabelle laden
         rows = []
         for i in range(6):
             rows = await page.query_selector_all("table tbody tr")
-            if rows: break
+            if rows:
+                print(f"📊 Tabelle geladen mit {len(rows)} Zeilen")
+                break
+            print("⏳ Warte auf Tabelle...")
             await asyncio.sleep(5)
 
-        print(f"📊 {len(rows)} Zeilen in der Tabelle gefunden")
+        if not rows:
+            print("⚠️ Keine Tabellenzeilen gefunden – Seite evtl. leer oder blockiert")
 
+        # Daten extrahieren
         for row in rows:
             try:
                 cols = await row.query_selector_all("td")
-                if len(cols) < 8: continue
+                if len(cols) < 8:
+                    continue
                 id_text     = (await cols[0].inner_text()).strip()
                 typ         = (await cols[1].inner_text()).strip()
                 ort         = (await cols[2].inner_text()).strip()
@@ -190,11 +223,16 @@ async def scrape_stoerungen():
                 ursache     = (await cols[5].inner_text()).strip()
                 gueltig_von = (await cols[6].inner_text()).strip()
                 gueltig_bis = (await cols[7].inner_text()).strip()
-                if typ.lower() in ("baustelle", "streckenruhe"): continue
-                try: gv_dt = datetime.strptime(gueltig_von, "%d.%m.%Y %H:%M")
-                except: gv_dt = None
-                try: gb_dt = datetime.strptime(gueltig_bis, "%d.%m.%Y %H:%M")
-                except: gb_dt = None
+                if typ.lower() in ("baustelle", "streckenruhe"):
+                    continue
+                try:
+                    gv_dt = datetime.strptime(gueltig_von, "%d.%m.%Y %H:%M")
+                except:
+                    gv_dt = None
+                try:
+                    gb_dt = datetime.strptime(gueltig_bis, "%d.%m.%Y %H:%M")
+                except:
+                    gb_dt = None
                 stoerungen.append({
                     "id": id_text, "typ": typ, "ort": ort, "region": region,
                     "wirkung": wirkung, "ursache": ursache,
@@ -206,9 +244,11 @@ async def scrape_stoerungen():
                         f"⏰ {gueltig_von} → {gueltig_bis}"
                     )
                 })
-            except: continue
+            except:
+                continue
 
         stoerungen.sort(key=lambda x: x["gueltig_von"] or datetime.min, reverse=True)
+
     except Exception as e:
         print("❌ Fehler beim Scraping:", e)
         traceback.print_exc()
