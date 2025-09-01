@@ -24,10 +24,11 @@ intents.message_content = True
 class StoerungsBot(commands.Bot):
     async def setup_hook(self):
         print("🚀 setup_hook() wurde aufgerufen")
+        self.loop.create_task(start_web_server())
+        self.loop.create_task(check_stoerungen())
         if POST_TO_X:
             print("🔧 Initialisiere X-Session...")
             await init_x_context()
-        self.loop.create_task(check_stoerungen())
 
 bot = StoerungsBot(command_prefix="!", intents=intents)
 
@@ -313,12 +314,9 @@ async def status(ctx):
         await ctx.send("⏳ Noch keine Prüfung durchgeführt.")
 
 # ---------- Main ----------
-async def main():
-    await start_web_server()
-    await bot.run(DISCORD_TOKEN)
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        bot.run(DISCORD_TOKEN)
     except KeyboardInterrupt:
         print("🛑 Bot wurde manuell beendet.")
