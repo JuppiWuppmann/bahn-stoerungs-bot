@@ -19,18 +19,27 @@ CLICK_TIMEOUT     = 20000
 
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
 
-# State
+# ---------- Bot-Klasse mit setup_hook ----------
+class StoerungsBot(commands.Bot):
+    async def setup_hook(self):
+        print("🚀 setup_hook() wurde aufgerufen")
+        if POST_TO_X:
+            print("🔧 Initialisiere X-Session...")
+            await init_x_context()
+        self.loop.create_task(check_stoerungen())
+
+bot = StoerungsBot(command_prefix="!", intents=intents)
+
+# ---------- State ----------
 last_stoerungen = {}
 last_check_time = None
 
-# Playwright global
 _pw = None
 _browser = None
 _x_context = None
 
-# ---------------- Healthcheck ----------------
+# ---------- Healthcheck ----------
 async def handle_health(_):
     return web.Response(text="OK")
 
@@ -45,7 +54,7 @@ async def start_web_server():
     await site.start()
     print(f"🌐 Health-Webserver läuft auf Port {port}")
 
-# ---------------- Playwright Setup ----------------
+# ---------- Playwright ----------
 async def ensure_playwright_and_browser():
     global _pw, _browser
     if _browser:
@@ -57,7 +66,7 @@ async def ensure_playwright_and_browser():
     )
     print("✅ Browser gestartet")
 
-# ---------------- X: Login + Post ----------------
+# ---------- X: Login + Post ----------
 async def init_x_context():
     global _x_context
     if not POST_TO_X:
@@ -99,7 +108,6 @@ async def post_to_x_minimal(message: str):
         await init_x_context()
     if not _x_context:
         return
-
     try:
         chunks = _chunk_for_x(message)
         page = await _x_context.new_page()
@@ -137,7 +145,7 @@ async def post_to_x_minimal(message: str):
 def build_x_text(item):
     return f"ID: {item['id']}\nOrt: {item['ort']}\nWirkung: {item['wirkung']}\nUrsache: {item['ursache']}"
 
-# ---------------- Scraper ----------------
+# ---------- Scraper ----------
 async def scrape_stoerungen():
     await ensure_playwright_and_browser()
     context = await _browser.new_context(viewport={"width": 1280, "height": 800})
@@ -209,7 +217,7 @@ async def scrape_stoerungen():
         await context.close()
     return stoerungen
 
-# ---------------- Notify-Loop (Fortsetzung) ----------------
+# ---------- Notify-Loop ----------
 async def safe_send_to_channel(channel, content):
     try:
         await channel.send(content)
@@ -218,7 +226,7 @@ async def safe_send_to_channel(channel, content):
 
 async def check_stoerungen():
     global last_stoerungen, last_check_time
-    while not bot.is_closed():
+    while True:
         try:
             print("🔍 Starte Scraping...")
             stoerungen = await scrape_stoerungen()
@@ -248,13 +256,13 @@ async def check_stoerungen():
                     await post_to_x_minimal(build_x_text(s))
 
         except Exception as e:
-            print("⚠️ Loop-Fehler:", e)
+            print("⚠️ Fehler im Notify-Loop:", e)
             traceback.print_exc()
 
         print("⏳ Warte 10 Minuten...")
         await asyncio.sleep(600)
 
-# ---------------- Commands ----------------
+# ---------- Discord Commands ----------
 @bot.command()
 async def status(ctx):
     if ADMIN_ID and str(ctx.author.id) != str(ADMIN_ID):
@@ -262,25 +270,15 @@ async def status(ctx):
     if last_check_time:
         await ctx.send(f"✅ Letzte Prüfung: {last_check_time.strftime('%d.%m.%Y %H:%M:%S')}")
     else:
-        await ctx.send("⏳ Noch keine Prüfung.")
+        await ctx.send("⏳ Noch keine Prüfung durchgeführt.")
 
-# ---------------- Events ----------------
-@bot.event
-async def on_ready():
-    print("🚀 on_ready() wurde aufgerufen")
-    print(f"🤖 Bot ready as {bot.user}")
-    if POST_TO_X:
-        print("🔧 Initialisiere X-Session...")
-        await init_x_context()
-
-# ---------------- Main ----------------
+# ---------- Main ----------
 async def main():
     await start_web_server()
-    bot.loop.create_task(check_stoerungen())  # Notify-Loop direkt starten
     await bot.start(DISCORD_TOKEN)
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("🛑 Bot beendet.")
+        print("🛑 Bot wurde manuell beendet.")
