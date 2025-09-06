@@ -24,20 +24,7 @@ def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
 
-# ---------------- Consent-Overlay schließen ----------------
-async def accept_consent(page):
-    try:
-        await page.wait_for_selector("#usercentrics-cmp-ui", timeout=5000)
-        consent_btn = await page.query_selector("button:has-text('Akzeptieren')")
-        if consent_btn:
-            await consent_btn.click()
-            print("✅ Consent-Overlay akzeptiert")
-        else:
-            print("⚠️ Consent-Button nicht gefunden")
-    except Exception as e:
-        print("⚠️ Consent-Overlay konnte nicht verarbeitet werden:", e)
-
-# ---------------- Weitere Popups schließen ----------------
+# ---------------- Popups entfernen ----------------
 async def close_popups(page):
     selectors = [
         "button:has-text('OK')",
@@ -66,7 +53,11 @@ async def scrape_stoerungen():
 
         try:
             await page.goto("https://strecken-info.de/", timeout=PAGE_LOAD_TIMEOUT)
-            await accept_consent(page)
+
+            # Consent-Overlay entfernen
+            await page.evaluate("document.getElementById('usercentrics-cmp-ui')?.remove()")
+            print("🧹 Consent-Overlay entfernt")
+
             await close_popups(page)
 
             # Filter öffnen
