@@ -188,6 +188,12 @@ async def main():
     for s in stoerungen:
         if s["id"] not in state:
             print(f"👉 Neue Störung: {s['id']}")
+            print(f"📍 Ort: {s['ort']}")
+            print(f"🗺️ Region: {s['region']}")
+            print(f"🚦 Wirkung: {s['wirkung']}")
+            print(f"📋 Ursache: {s['ursache']}")
+            print(f"⏰ Gültig: {s['gueltig_von']} → {s['gueltig_bis']}")
+
             await send_discord(s["discord_text"])
             send_bluesky(s["bsky_text"])
             state[s["id"]] = True
