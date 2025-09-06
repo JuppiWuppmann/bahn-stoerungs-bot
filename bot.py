@@ -38,7 +38,7 @@ async def close_popups(page):
         try:
             btn = await page.query_selector(selector)
             if btn:
-                await btn.click()
+                await btn.click(force=True)
                 print(f"✅ Popup geschlossen: {selector}")
         except Exception:
             continue
@@ -65,7 +65,7 @@ async def scrape_stoerungen():
 
             # Filter öffnen
             try:
-                await page.click("button:has-text('Filter')", timeout=8000)
+                await page.click("button:has-text('Filter')", timeout=8000, force=True)
                 print("✅ Filtermenü geöffnet")
             except Exception as e:
                 print("⚠️ Filtermenü konnte nicht geöffnet werden:", e)
@@ -82,9 +82,10 @@ async def scrape_stoerungen():
                     selector = f"label:has-text('{label}') input[type='checkbox']"
                     cb = await page.wait_for_selector(selector, timeout=5000)
                     await cb.scroll_into_view_if_needed()
+                    await asyncio.sleep(0.5)
                     is_checked = await cb.is_checked()
                     if is_checked != should_be_checked:
-                        await cb.click()
+                        await cb.click(force=True)
                         print(f"🔧 Checkbox '{label}' {'aktiviert' if should_be_checked else 'deaktiviert'}")
                     else:
                         print(f"✅ Checkbox '{label}' bereits korrekt gesetzt")
@@ -93,7 +94,7 @@ async def scrape_stoerungen():
 
             # „Einschränkungen“ aktivieren
             try:
-                await page.click("text=Einschränkungen", timeout=8000)
+                await page.click("text=Einschränkungen", timeout=8000, force=True)
                 print("✅ Tab 'Einschränkungen' aktiviert")
             except Exception as e:
                 print("⚠️ Tab 'Einschränkungen' konnte nicht aktiviert werden:", e)
