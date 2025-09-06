@@ -54,9 +54,12 @@ async def scrape_stoerungen():
         try:
             await page.goto("https://strecken-info.de/", timeout=PAGE_LOAD_TIMEOUT)
 
-            # Consent-Overlay entfernen
-            await page.evaluate("document.getElementById('usercentrics-cmp-ui')?.remove()")
-            print("🧹 Consent-Overlay entfernt")
+            # Blockierende Overlays entfernen
+            await page.evaluate("""
+                document.getElementById('usercentrics-cmp-ui')?.remove();
+                document.querySelector('.freiefahrt-yvnngg')?.remove();
+            """)
+            print("🧹 Consent & UI-Overlay entfernt")
 
             await close_popups(page)
 
