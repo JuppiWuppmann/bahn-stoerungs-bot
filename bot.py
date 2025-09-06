@@ -24,11 +24,23 @@ def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
 
-# ---------------- Popup-Handling ----------------
+# ---------------- Consent-Overlay schließen ----------------
+async def accept_consent(page):
+    try:
+        await page.wait_for_selector("#usercentrics-cmp-ui", timeout=5000)
+        consent_btn = await page.query_selector("button:has-text('Akzeptieren')")
+        if consent_btn:
+            await consent_btn.click()
+            print("✅ Consent-Overlay akzeptiert")
+        else:
+            print("⚠️ Consent-Button nicht gefunden")
+    except Exception as e:
+        print("⚠️ Consent-Overlay konnte nicht verarbeitet werden:", e)
+
+# ---------------- Weitere Popups schließen ----------------
 async def close_popups(page):
     selectors = [
         "button:has-text('OK')",
-        "button:has-text('Akzeptieren')",
         "button:has-text('Schließen')",
         "button[aria-label='Schließen']",
         "button[aria-label='Close']",
@@ -54,6 +66,7 @@ async def scrape_stoerungen():
 
         try:
             await page.goto("https://strecken-info.de/", timeout=PAGE_LOAD_TIMEOUT)
+            await accept_consent(page)
             await close_popups(page)
 
             # Filter öffnen
@@ -74,6 +87,7 @@ async def scrape_stoerungen():
                 try:
                     selector = f"label:has-text('{label}') input[type='checkbox']"
                     cb = await page.wait_for_selector(selector, timeout=5000)
+                    await cb.scroll_into_view_if_needed()
                     is_checked = await cb.is_checked()
                     if is_checked != should_be_checked:
                         await cb.click()
