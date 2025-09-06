@@ -59,20 +59,34 @@ async def scrape_stoerungen():
             # Filter öffnen
             try:
                 await page.click("button:has-text('Filter')", timeout=8000)
+                print("✅ Filtermenü geöffnet")
             except Exception as e:
-                print("⚠️ Filter konnte nicht geöffnet werden:", e)
+                print("⚠️ Filtermenü konnte nicht geöffnet werden:", e)
 
-            # Nur „Störungen“ anhaken
-            try:
-                cb = await page.wait_for_selector("label:has-text('Störungen') input[type='checkbox']", timeout=5000)
-                if not await cb.is_checked():
-                    await cb.click()
-            except Exception as e:
-                print("⚠️ Checkbox 'Störungen' nicht gefunden:", e)
+            # Checkboxen gezielt setzen
+            checkboxen = {
+                "Baustellen": False,
+                "Streckenruhe": False,
+                "Störungen": True
+            }
+
+            for label, should_be_checked in checkboxen.items():
+                try:
+                    selector = f"label:has-text('{label}') input[type='checkbox']"
+                    cb = await page.wait_for_selector(selector, timeout=5000)
+                    is_checked = await cb.is_checked()
+                    if is_checked != should_be_checked:
+                        await cb.click()
+                        print(f"🔧 Checkbox '{label}' {'aktiviert' if should_be_checked else 'deaktiviert'}")
+                    else:
+                        print(f"✅ Checkbox '{label}' bereits korrekt gesetzt")
+                except Exception as e:
+                    print(f"⚠️ Checkbox '{label}' konnte nicht verarbeitet werden:", e)
 
             # „Einschränkungen“ aktivieren
             try:
                 await page.click("text=Einschränkungen", timeout=8000)
+                print("✅ Tab 'Einschränkungen' aktiviert")
             except Exception as e:
                 print("⚠️ Tab 'Einschränkungen' konnte nicht aktiviert werden:", e)
 
@@ -81,6 +95,8 @@ async def scrape_stoerungen():
                 rows = await page.query_selector_all("table tbody tr")
                 if rows: break
                 await asyncio.sleep(5)
+
+            print(f"🔍 Tabellenzeilen gefunden: {len(rows)}")
 
             for row in rows:
                 try:
@@ -94,7 +110,6 @@ async def scrape_stoerungen():
                     ursache     = (await cols[5].inner_text()).strip()
                     gueltig_von = (await cols[6].inner_text()).strip()
                     gueltig_bis = (await cols[7].inner_text()).strip()
-                    if typ.lower() in ("baustelle", "streckenruhe"): continue
 
                     stoerungen.append({
                         "id": id_text,
@@ -177,4 +192,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
