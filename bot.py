@@ -5,12 +5,11 @@ from discord.ext import commands
 from playwright.async_api import async_playwright
 from atproto import Client
 
+# ---------------- Konfiguration ----------------
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID    = int(os.getenv("CHANNEL_ID", "0"))
-
 BSKY_HANDLE   = os.getenv("BSKY_HANDLE")
 BSKY_PASSWORD = os.getenv("BSKY_PASSWORD")
-
 STATE_FILE = "sent.json"
 PAGE_LOAD_TIMEOUT = 80000
 
@@ -25,6 +24,26 @@ def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
 
+# ---------------- Popup-Handling ----------------
+async def close_popups(page):
+    selectors = [
+        "button:has-text('OK')",
+        "button:has-text('Akzeptieren')",
+        "button:has-text('Schließen')",
+        "button[aria-label='Schließen']",
+        "button[aria-label='Close']",
+        ".close-button",
+        ".modal-close"
+    ]
+    for selector in selectors:
+        try:
+            btn = await page.query_selector(selector)
+            if btn:
+                await btn.click()
+                print(f"✅ Popup geschlossen: {selector}")
+        except Exception:
+            continue
+
 # ---------------- Scraper ----------------
 async def scrape_stoerungen():
     async with async_playwright() as pw:
@@ -32,34 +51,32 @@ async def scrape_stoerungen():
         context = await browser.new_context()
         page = await context.new_page()
         stoerungen = []
+
         try:
             await page.goto("https://strecken-info.de/", timeout=PAGE_LOAD_TIMEOUT)
-
-            # Overlay schließen
-            try:
-                btn = await page.query_selector("button:has-text('OK')")
-                if btn: await btn.click()
-            except: pass
+            await close_popups(page)
 
             # Filter öffnen
             try:
                 await page.click("button:has-text('Filter')", timeout=8000)
-            except: pass
+            except Exception as e:
+                print("⚠️ Filter konnte nicht geöffnet werden:", e)
 
             # Nur „Störungen“ anhaken
             try:
                 cb = await page.wait_for_selector("label:has-text('Störungen') input[type='checkbox']", timeout=5000)
                 if not await cb.is_checked():
                     await cb.click()
-            except: pass
+            except Exception as e:
+                print("⚠️ Checkbox 'Störungen' nicht gefunden:", e)
 
             # „Einschränkungen“ aktivieren
             try:
                 await page.click("text=Einschränkungen", timeout=8000)
-            except: pass
+            except Exception as e:
+                print("⚠️ Tab 'Einschränkungen' konnte nicht aktiviert werden:", e)
 
             # Tabelle laden
-            rows = []
             for i in range(6):
                 rows = await page.query_selector_all("table tbody tr")
                 if rows: break
@@ -78,6 +95,7 @@ async def scrape_stoerungen():
                     gueltig_von = (await cols[6].inner_text()).strip()
                     gueltig_bis = (await cols[7].inner_text()).strip()
                     if typ.lower() in ("baustelle", "streckenruhe"): continue
+
                     stoerungen.append({
                         "id": id_text,
                         "ort": ort,
@@ -99,13 +117,16 @@ async def scrape_stoerungen():
                             f"⏰ {gueltig_von} → {gueltig_bis}"
                         )
                     })
-                except: continue
+                except Exception:
+                    continue
+
         except Exception as e:
             print("❌ Fehler beim Scraping:", e)
             traceback.print_exc()
         finally:
             await context.close()
             await browser.close()
+
         return stoerungen
 
 # ---------------- Discord ----------------
@@ -156,3 +177,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
