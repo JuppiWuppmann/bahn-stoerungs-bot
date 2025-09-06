@@ -31,6 +31,7 @@ jobs:
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
           BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
           BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
+          GH-PAT: ${{ secrets.GH_PAT }}
 
       - name: Commit sent.json
         run: |
