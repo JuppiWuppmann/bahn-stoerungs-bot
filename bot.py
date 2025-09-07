@@ -24,25 +24,6 @@ def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
 
-# ---------------- Popups entfernen ----------------
-async def close_popups(page):
-    selectors = [
-        "button:has-text('OK')",
-        "button:has-text('Schließen')",
-        "button[aria-label='Schließen']",
-        "button[aria-label='Close']",
-        ".close-button",
-        ".modal-close"
-    ]
-    for selector in selectors:
-        try:
-            btn = await page.query_selector(selector)
-            if btn:
-                await btn.click(force=True)
-                print(f"✅ Popup geschlossen: {selector}")
-        except Exception:
-            continue
-
 # ---------------- Scraper ----------------
 async def scrape_stoerungen():
     async with async_playwright() as pw:
@@ -54,58 +35,36 @@ async def scrape_stoerungen():
         try:
             await page.goto("https://strecken-info.de/", timeout=PAGE_LOAD_TIMEOUT)
 
-            # Blockierende Overlays entfernen
+            # Overlays entfernen
             await page.evaluate("""
                 document.getElementById('usercentrics-cmp-ui')?.remove();
                 document.querySelector('.freiefahrt-yvnngg')?.remove();
             """)
-            print("🧹 Consent & UI-Overlay entfernt")
-
-            await close_popups(page)
 
             # Filter öffnen
             try:
                 await page.click("button:has-text('Filter')", timeout=8000, force=True)
-                print("✅ Filtermenü geöffnet")
-            except Exception as e:
-                print("⚠️ Filtermenü konnte nicht geöffnet werden:", e)
+            except: pass
 
-            # Checkboxen gezielt setzen
-            checkboxen = {
-                "Baustellen": False,
-                "Streckenruhe": False,
-                "Störungen": True
-            }
+            # Nur "Störungen" anhaken
+            try:
+                selector = "label:has-text('Störungen') input[type='checkbox']"
+                cb = await page.wait_for_selector(selector, timeout=5000)
+                if not await cb.is_checked():
+                    await cb.click(force=True)
+            except: pass
 
-            for label, should_be_checked in checkboxen.items():
-                try:
-                    selector = f"label:has-text('{label}') input[type='checkbox']"
-                    cb = await page.wait_for_selector(selector, timeout=5000)
-                    await cb.scroll_into_view_if_needed()
-                    await asyncio.sleep(0.5)
-                    is_checked = await cb.is_checked()
-                    if is_checked != should_be_checked:
-                        await cb.click(force=True)
-                        print(f"🔧 Checkbox '{label}' {'aktiviert' if should_be_checked else 'deaktiviert'}")
-                    else:
-                        print(f"✅ Checkbox '{label}' bereits korrekt gesetzt")
-                except Exception as e:
-                    print(f"⚠️ Checkbox '{label}' konnte nicht verarbeitet werden:", e)
-
-            # „Einschränkungen“ aktivieren
+            # Tab "Einschränkungen"
             try:
                 await page.click("text=Einschränkungen", timeout=8000, force=True)
-                print("✅ Tab 'Einschränkungen' aktiviert")
-            except Exception as e:
-                print("⚠️ Tab 'Einschränkungen' konnte nicht aktiviert werden:", e)
+            except: pass
 
             # Tabelle laden
+            rows = []
             for i in range(6):
                 rows = await page.query_selector_all("table tbody tr")
                 if rows: break
                 await asyncio.sleep(5)
-
-            print(f"🔍 Tabellenzeilen gefunden: {len(rows)}")
 
             for row in rows:
                 try:
@@ -119,6 +78,9 @@ async def scrape_stoerungen():
                     ursache     = (await cols[5].inner_text()).strip()
                     gueltig_von = (await cols[6].inner_text()).strip()
                     gueltig_bis = (await cols[7].inner_text()).strip()
+
+                    if typ.lower() in ("baustelle", "streckenruhe"):
+                        continue
 
                     stoerungen.append({
                         "id": id_text,
@@ -141,7 +103,7 @@ async def scrape_stoerungen():
                             f"⏰ {gueltig_von} → {gueltig_bis}"
                         )
                     })
-                except Exception:
+                except: 
                     continue
 
         except Exception as e:
@@ -154,48 +116,59 @@ async def scrape_stoerungen():
         return stoerungen
 
 # ---------------- Discord ----------------
+intents = discord.Intents.default()
+bot = commands.Bot(command_prefix="!", intents=intents)
+
 async def send_discord(message: str):
-    intents = discord.Intents.default()
-    client = discord.Client(intents=intents)
-
-    @client.event
-    async def on_ready():
+    channel = bot.get_channel(CHANNEL_ID)
+    if channel:
         try:
-            channel = client.get_channel(CHANNEL_ID)
-            if channel:
-                await channel.send(message)
-        finally:
-            await client.close()
-
-    await client.start(DISCORD_TOKEN)
+            await channel.send(message)
+            print("✅ Discord gepostet")
+        except Exception as e:
+            print("❌ Discord-Fehler:", e)
 
 # ---------------- Bluesky ----------------
+def split_message(text, limit=300):
+    parts, cur = [], ""
+    for word in text.split():
+        if len(cur) + len(word) + 1 > limit:
+            parts.append(cur.strip())
+            cur = word
+        else:
+            cur += " " + word
+    if cur.strip():
+        parts.append(cur.strip())
+    return parts
+
 def send_bluesky(message: str):
     try:
         client = Client()
         client.login(BSKY_HANDLE, BSKY_PASSWORD)
-        client.send_post(message)
-        print("✅ Bluesky gepostet")
+
+        parts = split_message(message, 300)
+        reply_ref = None
+
+        for part in parts:
+            post = client.send_post(part, reply_to=reply_ref)
+            reply_ref = post
+        print(f"✅ Bluesky: {len(parts)} Teile gepostet")
     except Exception as e:
         print("❌ Bluesky-Fehler:", e)
 
 # ---------------- Main ----------------
-async def main():
+async def check_and_post():
     state = load_state()
     stoerungen = await scrape_stoerungen()
 
     new_found = False
     for s in stoerungen:
         if s["id"] not in state:
-            print(f"👉 Neue Störung: {s['id']}")
-            print(f"📍 Ort: {s['ort']}")
-            print(f"🗺️ Region: {s['region']}")
-            print(f"🚦 Wirkung: {s['wirkung']}")
-            print(f"📋 Ursache: {s['ursache']}")
-            print(f"⏰ Gültig: {s['gueltig_von']} → {s['gueltig_bis']}")
+            print(f"👉 Neue Störung: {s['id']} ({s['ort']})")
 
             await send_discord(s["discord_text"])
             send_bluesky(s["bsky_text"])
+
             state[s["id"]] = True
             new_found = True
 
@@ -205,5 +178,12 @@ async def main():
     else:
         print("ℹ️ Keine neuen Störungen")
 
+@bot.event
+async def on_ready():
+    print(f"🤖 Bot eingeloggt als {bot.user}")
+    await check_and_post()
+    await bot.close()  # wichtig, sonst hängt GitHub Action ewig
+
+# ---------------- Start ----------------
 if __name__ == "__main__":
-    asyncio.run(main())
+    bot.run(DISCORD_TOKEN)
