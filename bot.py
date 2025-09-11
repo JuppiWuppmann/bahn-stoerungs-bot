@@ -1,3 +1,4 @@
+
 import os, json, asyncio, traceback
 from datetime import datetime
 import discord
@@ -325,29 +326,22 @@ async def check_and_post():
     high_priority = [s for s in new_stoerungen if s["priority"] == "high"]
     low_priority = [s for s in new_stoerungen if s["priority"] == "low"]
     
-    print(f"🔍 {len(high_priority)} prioritäre Störungen, {len(low_priority)} normale Baustellen")
+    print(f"🔍 {len(high_priority)} Störungen gefunden (alle prioritär)")
     
-    # Prioritäre Störungen sofort einzeln posten
+    # Alle Störungen einzeln posten (da nur noch Störungen durchkommen)
     for s in high_priority:
-        print(f"🚨 PRIORITÄR: {s['id']} ({s['typ']}) - {s['ort']}")
+        print(f"🚨 STÖRUNG: {s['id']} ({s['typ']}) - {s['ort']}")
         await send_discord(s["discord_text"])
         send_bluesky(s["bsky_text"])
         state[s["id"]] = {"typ": s["typ"], "ort": s["ort"], "priority": "high"}
         new_found = True
         await asyncio.sleep(1)  # Rate limiting
 
-    # Normale Baustellen in Batches (weniger Spam)
-    if low_priority:
-        print(f"🔍 Poste {len(low_priority)} Baustellen in Batches...")
-        discord_messages = [s["discord_text"] for s in low_priority]
-        bsky_messages = [s["bsky_text"] for s in low_priority]
-        
-        await send_discord_batch(discord_messages, batch_size=3)
-        send_bluesky_batch(bsky_messages)
-        
+    # Keine Baustellen mehr zu verarbeiten
+    if low_priority:  # Sollte leer sein
+        print(f"⚠️ Unerwartete niedrig-prioritäre Einträge: {len(low_priority)}")
         for s in low_priority:
             state[s["id"]] = {"typ": s["typ"], "ort": s["ort"], "priority": "low"}
-            new_found = True
 
     # Behobene Einträge
     current_ids = {s["id"] for s in stoerungen}
