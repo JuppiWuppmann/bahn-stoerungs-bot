@@ -1,4 +1,3 @@
-
 import os, json, asyncio, traceback
 from datetime import datetime
 import discord
