@@ -24,6 +24,41 @@ def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
 
+# ---------------- Helper Functions ----------------
+def is_valid_stoerung(id_text, typ):
+    """Filtere ungültige Einträge heraus"""
+    # Header-Zeilen ignorieren
+    if not id_text or id_text.strip() in ["ID", "id", "ID\n0"]:
+        return False
+    
+    # Newlines in ID sind ein Zeichen für Header
+    if "\n" in id_text:
+        return False
+    
+    # Typ muss gültig sein
+    if not typ or typ.strip().lower() in ["typ", "type", "typ\n0"]:
+        return False
+    
+    # Nur bestimmte Typen erlauben
+    valid_types = ["störung", "baustelle", "sperrung", "einschränkung"]
+    if not any(vtype in typ.lower() for vtype in valid_types):
+        return False
+        
+    return True
+
+def should_notify_immediately(typ, wirkung):
+    """Bestimme ob sofort gepostet werden soll (für akute Störungen)"""
+    # Akute Störungen sofort posten
+    if "störung" in typ.lower():
+        return True
+    
+    # Totalsperrungen auch sofort posten
+    if "totalsperrung" in wirkung.lower():
+        return True
+        
+    # Baustellen können warten (weniger spam)
+    return False
+
 # ---------------- Scraper ----------------
 async def scrape_stoerungen():
     print("🔍 Starte Scraping...")
@@ -46,7 +81,7 @@ async def scrape_stoerungen():
             """)
             print("🔍 Overlays entfernt")
 
-            # Filter öffnen - warten bis verfügbar
+            # Filter öffnen
             try:
                 print("🔍 Öffne Filter...")
                 await page.wait_for_selector("button:has-text('Filter')", timeout=10000)
@@ -56,176 +91,136 @@ async def scrape_stoerungen():
             except Exception as e: 
                 print(f"⚠️ Filter-Button nicht gefunden: {e}")
 
-            # Störungen und Baustellen Filter aktivieren
+            # BEIDE Filter aktivieren: Störungen UND Baustellen
             try:
-                print("🔍 Aktiviere Störungen-Filter...")
+                print("🔍 Aktiviere Filter...")
                 
-                # Störungen aktivieren
-                stoerungen_selector = "input[type='checkbox'][name*='störung' i], input[type='checkbox'] + label:has-text('Störung')"
-                try:
-                    await page.wait_for_selector("input[type='checkbox']", timeout=5000)
-                    checkboxes = await page.query_selector_all("input[type='checkbox']")
-                    
-                    for cb in checkboxes:
-                        # Schaue nach dem Label oder Namen
-                        try:
-                            parent = await cb.query_selector("xpath=..")
-                            parent_text = await parent.inner_text() if parent else ""
+                await page.wait_for_selector("input[type='checkbox']", timeout=5000)
+                checkboxes = await page.query_selector_all("input[type='checkbox']")
+                
+                for cb in checkboxes:
+                    try:
+                        # Schaue nach dem Parent-Element für den Text
+                        parent = await cb.query_selector("xpath=..")
+                        if parent:
+                            parent_text = await parent.inner_text()
                             
-                            # Wenn es Störungen oder Baustellen enthält, aktivieren
-                            if "störung" in parent_text.lower() or "baustell" in parent_text.lower():
-                                is_checked = await cb.is_checked()
-                                if not is_checked:
+                            # Störungen und Baustellen aktivieren, Streckenruhe deaktivieren
+                            if "störung" in parent_text.lower():
+                                if not await cb.is_checked():
                                     await cb.click(force=True)
-                                    print(f"✅ Aktiviert: {parent_text.strip()}")
-                        except:
-                            continue
-                            
-                except Exception as filter_e:
-                    print(f"⚠️ Filter-Aktivierung fehlgeschlagen: {filter_e}")
+                                    print("✅ Störungen aktiviert")
+                            elif "baustell" in parent_text.lower():
+                                if not await cb.is_checked():
+                                    await cb.click(force=True)
+                                    print("✅ Baustellen aktiviert")
+                            elif "streckenruhe" in parent_text.lower():
+                                if await cb.is_checked():
+                                    await cb.click(force=True)
+                                    print("❌ Streckenruhe deaktiviert")
+                                    
+                    except Exception as cb_e:
+                        continue
 
             except Exception as e: 
-                print(f"⚠️ Filter-Konfiguration Fehler: {e}")
+                print(f"⚠️ Filter-Aktivierung fehlgeschlagen: {e}")
 
-            # Auf "Einschränkungen" Tab wechseln (hier sind die Daten)
+            # Auf "Einschränkungen" Tab wechseln
             try:
                 print("🔍 Wechsle zu Einschränkungen-Tab...")
                 await page.wait_for_selector("button:has-text('Einschränkungen')", timeout=10000)
                 await page.click("button:has-text('Einschränkungen')", timeout=5000, force=True)
-                await asyncio.sleep(3)
+                await asyncio.sleep(4)
                 print("✅ Einschränkungen-Tab aktiviert")
             except Exception as e: 
                 print(f"⚠️ Einschränkungen-Tab nicht gefunden: {e}")
 
-            # Warten auf Daten-Container statt Tabelle
-            print("🔍 Warte auf Datencontainer...")
-            await asyncio.sleep(8)
+            # Warten auf Tabelle
+            print("🔍 Warte auf Tabelle...")
+            await asyncio.sleep(6)
 
-            # Verschiedene Selektoren für Daten probieren
-            data_found = False
-            stoerungen_data = []
+            # Tabellen-Suche
+            for attempt in range(3):
+                await asyncio.sleep(2)
+                tables = await page.query_selector_all("table")
+                if tables:
+                    print(f"✅ {len(tables)} Tabellen gefunden")
+                    break
+                print(f"🔍 Versuch {attempt+1}/3: Noch keine Tabellen...")
 
-            # Versuch 1: Suche nach divs mit Störungsdaten
-            try:
-                print("🔍 Suche nach Daten-Containern...")
-                
-                # Mögliche Container-Selektoren
-                selectors = [
-                    "div[class*='row'], div[class*='item'], div[class*='entry']",
-                    ".list-item, .data-item, .disruption-item",
-                    "div:has-text('ICE'), div:has-text('RB'), div:has-text('S')",
-                ]
-                
-                for selector in selectors:
-                    containers = await page.query_selector_all(selector)
-                    print(f"🔍 {len(containers)} Container mit '{selector}' gefunden")
-                    
-                    for container in containers:
-                        try:
-                            text = await container.inner_text()
-                            # Prüfe ob es Bahn-relevante Daten enthält
-                            if any(keyword in text.lower() for keyword in ["ice", "rb", "s ", "störung", "baustell", "gleis"]):
-                                print(f"📝 Potenzieller Datensatz: {text[:100]}...")
-                                # Hier könntest du die Daten parsen
-                                
-                        except:
-                            continue
-                            
-            except Exception as e:
-                print(f"🔍 Container-Suche Fehler: {e}")
+            rows = await page.query_selector_all("table tbody tr, table tr")
+            print(f"🔍 {len(rows)} Zeilen gefunden")
 
-            # Versuch 2: Tabellen-Suche (falls doch vorhanden)
-            try:
-                print("🔍 Suche nach Tabellen...")
-                
-                # Warte länger auf Tabellen
-                for attempt in range(5):
-                    await asyncio.sleep(2)
-                    tables = await page.query_selector_all("table")
-                    if tables:
-                        print(f"✅ {len(tables)} Tabellen gefunden")
-                        break
-                    print(f"🔍 Versuch {attempt+1}/5: Noch keine Tabellen...")
+            processed_count = 0
+            skipped_count = 0
 
-                rows = await page.query_selector_all("table tbody tr, table tr")
-                print(f"🔍 {len(rows)} Zeilen gefunden")
-
-                for i, row in enumerate(rows):
-                    try:
-                        cols = await row.query_selector_all("td, th")
-                        if len(cols) < 3:  # Mindestens 3 Spalten erwartet
-                            continue
-                            
-                        # Extrahiere Daten aus den Spalten
-                        col_texts = []
-                        for col in cols:
-                            text = (await col.inner_text()).strip()
-                            col_texts.append(text)
-                        
-                        print(f"🔍 Zeile {i+1}: {col_texts}")
-                        
-                        # Wenn genug Daten vorhanden, als Störung behandeln
-                        if len(col_texts) >= 6 and any(col_texts[0]):  # ID nicht leer
-                            stoerungen.append({
-                                "id": col_texts[0],
-                                "typ": col_texts[1] if len(col_texts) > 1 else "Unbekannt",
-                                "ort": col_texts[2] if len(col_texts) > 2 else "Unbekannt",
-                                "region": col_texts[3] if len(col_texts) > 3 else "Unbekannt",
-                                "wirkung": col_texts[4] if len(col_texts) > 4 else "Unbekannt",
-                                "ursache": col_texts[5] if len(col_texts) > 5 else "Unbekannt",
-                                "gueltig_von": col_texts[6] if len(col_texts) > 6 else "Jetzt",
-                                "gueltig_bis": col_texts[7] if len(col_texts) > 7 else "Unbekannt",
-                            })
-                            print(f"✅ Störung hinzugefügt: {col_texts[0]}")
-
-                    except Exception as row_e:
-                        print(f"❌ Fehler bei Zeile {i+1}: {row_e}")
-                        continue
-
-            except Exception as e:
-                print(f"🔍 Tabellen-Suche Fehler: {e}")
-
-            # Debug: Seitencontent ausgeben
-            if not stoerungen:
-                print("🔍 Keine Störungen gefunden - Debug-Ausgabe:")
+            for i, row in enumerate(rows):
                 try:
-                    body_text = await page.inner_text("body")
-                    relevant_text = [line for line in body_text.split('\n') 
-                                   if any(word in line.lower() for word in ['störung', 'baustell', 'ice', 'rb', 'sperrung'])]
-                    if relevant_text:
-                        print("🔍 Relevante Zeilen gefunden:")
-                        for line in relevant_text[:10]:
-                            print(f"  📝 {line.strip()}")
+                    cols = await row.query_selector_all("td, th")
+                    if len(cols) < 6:  # Mindestens 6 Spalten erwartet
+                        continue
+                        
+                    # Extrahiere Daten aus den Spalten
+                    col_texts = []
+                    for col in cols:
+                        text = (await col.inner_text()).strip()
+                        col_texts.append(text)
+                    
+                    id_text = col_texts[0]
+                    typ = col_texts[1] if len(col_texts) > 1 else "Unbekannt"
+                    
+                    # Validierung der Daten
+                    if not is_valid_stoerung(id_text, typ):
+                        print(f"🔍 Zeile {i+1} übersprungen (Header/Invalid): {id_text}")
+                        skipped_count += 1
+                        continue
+                    
+                    print(f"🔍 Zeile {i+1}: ID={id_text}, Typ={typ}")
+                    
+                    # Störung erstellen
+                    stoerung = {
+                        "id": id_text,
+                        "typ": typ,
+                        "ort": col_texts[2] if len(col_texts) > 2 else "Unbekannt",
+                        "region": col_texts[3] if len(col_texts) > 3 else "Unbekannt",
+                        "wirkung": col_texts[4] if len(col_texts) > 4 else "Unbekannt",
+                        "ursache": col_texts[5] if len(col_texts) > 5 else "Unbekannt",
+                        "gueltig_von": col_texts[6] if len(col_texts) > 6 else "Jetzt",
+                        "gueltig_bis": col_texts[7] if len(col_texts) > 7 else "Unbekannt",
+                        "priority": "high" if should_notify_immediately(typ, col_texts[4] if len(col_texts) > 4 else "") else "low"
+                    }
+                    
+                    # Emoji basierend auf Typ
+                    if "störung" in typ.lower():
+                        emoji = "🚨"
+                    elif "baustell" in typ.lower():
+                        emoji = "🚧"
                     else:
-                        print("🔍 Keine relevanten Zeilen im Body-Text")
-                except:
-                    pass
+                        emoji = "⚠️"
+                    
+                    stoerung["discord_text"] = (
+                        f"{emoji} **Neue Bahn-{stoerung['typ']}!**\n"
+                        f"🆔 {stoerung['id']}\n📍 {stoerung['ort']}\n🗺️ {stoerung['region']}\n"
+                        f"🚦 {stoerung['wirkung']}\n📋 {stoerung['ursache']}\n"
+                        f"⏰ {stoerung['gueltig_von']} → {stoerung['gueltig_bis']}"
+                    )
+                    
+                    stoerung["bsky_text"] = (
+                        f"{emoji} Neue Bahn-{stoerung['typ']}!\n"
+                        f"ID: {stoerung['id']}\nOrt: {stoerung['ort']}\nRegion: {stoerung['region']}\n"
+                        f"Wirkung: {stoerung['wirkung']}\nUrsache: {stoerung['ursache']}\n"
+                        f"⏰ {stoerung['gueltig_von']} → {stoerung['gueltig_bis']}"
+                    )
 
-            # Nachrichten für gefundene Störungen erstellen
-            for s in stoerungen:
-                # Emoji basierend auf Typ
-                if "baustell" in s["typ"].lower():
-                    emoji = "🚧"
-                elif "störung" in s["typ"].lower():
-                    emoji = "🚨"
-                else:
-                    emoji = "⚠️"
-                
-                s["discord_text"] = (
-                    f"{emoji} **Neue Bahn-{s['typ']}!**\n"
-                    f"🆔 {s['id']}\n📍 {s['ort']}\n🗺️ {s['region']}\n"
-                    f"🚦 {s['wirkung']}\n📋 {s['ursache']}\n"
-                    f"⏰ {s['gueltig_von']} → {s['gueltig_bis']}"
-                )
-                
-                s["bsky_text"] = (
-                    f"{emoji} Neue Bahn-{s['typ']}!\n"
-                    f"ID: {s['id']}\nOrt: {s['ort']}\nRegion: {s['region']}\n"
-                    f"Wirkung: {s['wirkung']}\nUrsache: {s['ursache']}\n"
-                    f"⏰ {s['gueltig_von']} → {s['gueltig_bis']}"
-                )
+                    stoerungen.append(stoerung)
+                    processed_count += 1
+                    print(f"✅ {typ} hinzugefügt: {id_text}")
 
-            print(f"🔍 Scraping abgeschlossen: {len(stoerungen)} Einträge gefunden")
+                except Exception as row_e:
+                    print(f"❌ Fehler bei Zeile {i+1}: {row_e}")
+                    continue
+
+            print(f"🔍 Scraping abgeschlossen: {processed_count} gültige Einträge, {skipped_count} übersprungen")
 
         except Exception as e:
             print("❌ Fehler beim Scraping:", e)
@@ -248,6 +243,32 @@ async def send_discord(message: str):
             print("✅ Discord gepostet")
         except Exception as e:
             print("❌ Discord-Fehler:", e)
+
+async def send_discord_batch(messages: list, batch_size=5):
+    """Sende mehrere Nachrichten in Batches um Spam zu vermeiden"""
+    channel = bot.get_channel(CHANNEL_ID)
+    if not channel:
+        return
+        
+    for i in range(0, len(messages), batch_size):
+        batch = messages[i:i+batch_size]
+        
+        if len(batch) == 1:
+            # Einzelnachricht
+            await send_discord(batch[0])
+        else:
+            # Batch-Nachricht
+            combined = f"🔄 **{len(batch)} neue Einträge:**\n\n" + "\n\n---\n\n".join(batch)
+            if len(combined) > 2000:  # Discord Limit
+                # Aufteilen wenn zu lang
+                for msg in batch:
+                    await send_discord(msg)
+                    await asyncio.sleep(1)  # Rate limiting
+            else:
+                await send_discord(combined)
+        
+        if i + batch_size < len(messages):
+            await asyncio.sleep(2)  # Pause zwischen Batches
 
 # ---------------- Bluesky ----------------
 def split_message(text, limit=300):
@@ -277,36 +298,58 @@ def send_bluesky(message: str):
     except Exception as e:
         print("❌ Bluesky-Fehler:", e)
 
+def send_bluesky_batch(messages: list):
+    """Sende Bluesky Batch-Nachrichten"""
+    if len(messages) <= 3:
+        for msg in messages:
+            send_bluesky(msg)
+    else:
+        # Zusammenfassung für viele Nachrichten
+        summary = f"🔄 {len(messages)} neue Bahn-Einträge gefunden! Details im Discord-Channel."
+        send_bluesky(summary)
+
 # ---------------- Main ----------------
 async def check_and_post():
     print("🔍 Lade gespeicherten State...")
     state = load_state()
     print(f"🔍 {len(state)} bereits bekannte Einträge")
     
-    if state:
-        print("🔍 Bekannte IDs:", list(state.keys())[:10], "..." if len(state) > 10 else "")
-    
     stoerungen = await scrape_stoerungen()
     print(f"🔍 {len(stoerungen)} aktuelle Einträge gefunden")
 
-    if stoerungen:
-        print("🔍 Aktuelle IDs:", [s["id"] for s in stoerungen[:10]], "..." if len(stoerungen) > 10 else "")
-    
     new_found = False
     resolved_count = 0
     
-    # Neue Störungen/Baustellen finden
-    for s in stoerungen:
-        if s["id"] not in state:
-            print(f"👉 Neuer Eintrag gefunden: {s['id']} ({s['typ']}) - {s['ort']}")
+    # Neue Störungen nach Priorität sortieren
+    new_stoerungen = [s for s in stoerungen if s["id"] not in state]
+    high_priority = [s for s in new_stoerungen if s["priority"] == "high"]
+    low_priority = [s for s in new_stoerungen if s["priority"] == "low"]
+    
+    print(f"🔍 {len(high_priority)} prioritäre Störungen, {len(low_priority)} normale Baustellen")
+    
+    # Prioritäre Störungen sofort einzeln posten
+    for s in high_priority:
+        print(f"🚨 PRIORITÄR: {s['id']} ({s['typ']}) - {s['ort']}")
+        await send_discord(s["discord_text"])
+        send_bluesky(s["bsky_text"])
+        state[s["id"]] = {"typ": s["typ"], "ort": s["ort"], "priority": "high"}
+        new_found = True
+        await asyncio.sleep(1)  # Rate limiting
 
-            await send_discord(s["discord_text"])
-            send_bluesky(s["bsky_text"])
-
-            state[s["id"]] = {"typ": s["typ"], "ort": s["ort"]}
+    # Normale Baustellen in Batches (weniger Spam)
+    if low_priority:
+        print(f"🔍 Poste {len(low_priority)} Baustellen in Batches...")
+        discord_messages = [s["discord_text"] for s in low_priority]
+        bsky_messages = [s["bsky_text"] for s in low_priority]
+        
+        await send_discord_batch(discord_messages, batch_size=3)
+        send_bluesky_batch(bsky_messages)
+        
+        for s in low_priority:
+            state[s["id"]] = {"typ": s["typ"], "ort": s["ort"], "priority": "low"}
             new_found = True
 
-    # Behobene/abgeschlossene Einträge finden
+    # Behobene Einträge
     current_ids = {s["id"] for s in stoerungen}
     resolved_ids = []
     for stored_id in list(state.keys()):
@@ -318,12 +361,12 @@ async def check_and_post():
     
     if resolved_ids:
         print(f"✅ {resolved_count} Einträge behoben/beendet")
-        resolved_message = f"✅ **Einträge behoben/beendet!**\n🆔 {', '.join(resolved_ids[:10])}"
+        resolved_message = f"✅ **{resolved_count} Einträge behoben/beendet!**\n🆔 {', '.join(resolved_ids[:10])}"
         if len(resolved_ids) > 10:
             resolved_message += f"\n... und {len(resolved_ids)-10} weitere"
         
         await send_discord(resolved_message)
-        send_bluesky(f"✅ Behoben/Beendet! IDs: {', '.join(resolved_ids[:5])}{'...' if len(resolved_ids) > 5 else ''}")
+        send_bluesky(f"✅ {resolved_count} Einträge behoben/beendet!")
         new_found = True
 
     if new_found:
