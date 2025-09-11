@@ -5,90 +5,6 @@ from discord.ext import commands
 from playwright.async_api import async_playwright
 from atproto import Client
 
-# ============== DEBUG TEST (TEMPORÄR) ==============
-print("🔍 STARTING DEBUG TEST...")
-
-async def debug_test():
-    print("🔍 Testing strecken-info.de structure...")
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True, args=["--no-sandbox"])
-        page = await browser.new_page()
-        
-        try:
-            print("🔍 Loading page...")
-            await page.goto("https://strecken-info.de/", timeout=60000)
-            await page.wait_for_load_state("networkidle", timeout=20000)
-            
-            title = await page.title()
-            print(f"📄 Title: {title}")
-            
-            # Test basic elements
-            body_text = await page.inner_text("body")
-            print(f"📝 Body text length: {len(body_text)} chars")
-            print(f"📝 First 300 chars: {body_text[:300]}...")
-            
-            # Test button finding
-            buttons = await page.query_selector_all("button")
-            print(f"🔘 {len(buttons)} buttons found")
-            
-            for i, btn in enumerate(buttons[:8]):
-                try:
-                    text = await btn.inner_text()
-                    if text.strip():
-                        print(f"  Button {i+1}: '{text.strip()}'")
-                except:
-                    pass
-            
-            # Test table finding  
-            tables = await page.query_selector_all("table")
-            print(f"📊 {len(tables)} tables found")
-            
-            all_rows = await page.query_selector_all("tr")
-            print(f"📋 {len(all_rows)} total rows found")
-            
-            tbody_rows = await page.query_selector_all("table tbody tr")
-            print(f"📋 {len(tbody_rows)} tbody rows found")
-            
-            # Test specific keywords
-            keywords = ["Störung", "störung", "Einschränkung", "Baustelle", "Filter"]
-            for keyword in keywords:
-                count = body_text.lower().count(keyword.lower())
-                print(f"🔍 '{keyword}': {count} occurrences")
-            
-            # Test filter elements
-            filter_elements = await page.query_selector_all("*:has-text('Filter')")
-            print(f"🔍 {len(filter_elements)} 'Filter' elements")
-            
-            # Test if we can click filter
-            try:
-                filter_btn = await page.query_selector("button:has-text('Filter')")
-                if filter_btn:
-                    print("✅ Filter button found and clickable")
-                    await filter_btn.click(force=True)
-                    await asyncio.sleep(3)
-                    
-                    # Check checkboxes after filter opened
-                    checkboxes = await page.query_selector_all("input[type='checkbox']")
-                    print(f"☑️ {len(checkboxes)} checkboxes found after filter click")
-                    
-                else:
-                    print("❌ No Filter button found")
-            except Exception as filter_e:
-                print(f"❌ Filter click failed: {filter_e}")
-            
-        except Exception as e:
-            print(f"❌ Test error: {e}")
-            traceback.print_exc()
-        finally:
-            await browser.close()
-
-# Führe Debug-Test aus und beende dann
-asyncio.run(debug_test())
-print("🔍 DEBUG TEST COMPLETE - EXITING BEFORE NORMAL BOT CODE")
-exit(0)
-
-# ============== NORMALER BOT CODE (wird nicht erreicht) ==============
-
 # ---------------- Konfiguration ----------------
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID    = int(os.getenv("CHANNEL_ID", "0"))
@@ -120,6 +36,7 @@ async def scrape_stoerungen():
         try:
             print("🔍 Lade Seite...")
             await page.goto("https://strecken-info.de/", timeout=PAGE_LOAD_TIMEOUT)
+            await page.wait_for_load_state("networkidle", timeout=20000)
             print("✅ Seite geladen")
 
             # Overlays entfernen
@@ -129,169 +46,186 @@ async def scrape_stoerungen():
             """)
             print("🔍 Overlays entfernt")
 
-            # Filter öffnen
+            # Filter öffnen - warten bis verfügbar
             try:
                 print("🔍 Öffne Filter...")
+                await page.wait_for_selector("button:has-text('Filter')", timeout=10000)
                 await page.click("button:has-text('Filter')", timeout=8000, force=True)
+                await asyncio.sleep(2)
                 print("✅ Filter geöffnet")
             except Exception as e: 
                 print(f"⚠️ Filter-Button nicht gefunden: {e}")
 
-            # Nur "Störungen" anhaken
+            # Störungen und Baustellen Filter aktivieren
             try:
-                print("🔍 Setze Störungen-Filter...")
-                selector = "label:has-text('Störungen') input[type='checkbox']"
-                cb = await page.wait_for_selector(selector, timeout=5000)
-                if not await cb.is_checked():
-                    await cb.click(force=True)
-                    print("✅ Störungen-Filter aktiviert")
-                else:
-                    print("ℹ️ Störungen-Filter bereits aktiv")
-            except Exception as e: 
-                print(f"⚠️ Störungen-Filter nicht gefunden: {e}")
-
-            # WICHTIG: Tab "Störungen" wählen (NICHT Einschränkungen!)
-            try:
-                print("🔍 Klicke auf STÖRUNGEN-Tab...")
-                # Mehrere Selektoren probieren
-                tab_clicked = False
+                print("🔍 Aktiviere Störungen-Filter...")
                 
-                # Versuch 1: Text-Selektor
+                # Störungen aktivieren
+                stoerungen_selector = "input[type='checkbox'][name*='störung' i], input[type='checkbox'] + label:has-text('Störung')"
                 try:
-                    await page.click("text=Störungen", timeout=5000, force=True)
-                    tab_clicked = True
-                    print("✅ Störungen-Tab (text) aktiviert")
+                    await page.wait_for_selector("input[type='checkbox']", timeout=5000)
+                    checkboxes = await page.query_selector_all("input[type='checkbox']")
+                    
+                    for cb in checkboxes:
+                        # Schaue nach dem Label oder Namen
+                        try:
+                            parent = await cb.query_selector("xpath=..")
+                            parent_text = await parent.inner_text() if parent else ""
+                            
+                            # Wenn es Störungen oder Baustellen enthält, aktivieren
+                            if "störung" in parent_text.lower() or "baustell" in parent_text.lower():
+                                is_checked = await cb.is_checked()
+                                if not is_checked:
+                                    await cb.click(force=True)
+                                    print(f"✅ Aktiviert: {parent_text.strip()}")
+                        except:
+                            continue
+                            
+                except Exception as filter_e:
+                    print(f"⚠️ Filter-Aktivierung fehlgeschlagen: {filter_e}")
+
+            except Exception as e: 
+                print(f"⚠️ Filter-Konfiguration Fehler: {e}")
+
+            # Auf "Einschränkungen" Tab wechseln (hier sind die Daten)
+            try:
+                print("🔍 Wechsle zu Einschränkungen-Tab...")
+                await page.wait_for_selector("button:has-text('Einschränkungen')", timeout=10000)
+                await page.click("button:has-text('Einschränkungen')", timeout=5000, force=True)
+                await asyncio.sleep(3)
+                print("✅ Einschränkungen-Tab aktiviert")
+            except Exception as e: 
+                print(f"⚠️ Einschränkungen-Tab nicht gefunden: {e}")
+
+            # Warten auf Daten-Container statt Tabelle
+            print("🔍 Warte auf Datencontainer...")
+            await asyncio.sleep(8)
+
+            # Verschiedene Selektoren für Daten probieren
+            data_found = False
+            stoerungen_data = []
+
+            # Versuch 1: Suche nach divs mit Störungsdaten
+            try:
+                print("🔍 Suche nach Daten-Containern...")
+                
+                # Mögliche Container-Selektoren
+                selectors = [
+                    "div[class*='row'], div[class*='item'], div[class*='entry']",
+                    ".list-item, .data-item, .disruption-item",
+                    "div:has-text('ICE'), div:has-text('RB'), div:has-text('S')",
+                ]
+                
+                for selector in selectors:
+                    containers = await page.query_selector_all(selector)
+                    print(f"🔍 {len(containers)} Container mit '{selector}' gefunden")
+                    
+                    for container in containers:
+                        try:
+                            text = await container.inner_text()
+                            # Prüfe ob es Bahn-relevante Daten enthält
+                            if any(keyword in text.lower() for keyword in ["ice", "rb", "s ", "störung", "baustell", "gleis"]):
+                                print(f"📝 Potenzieller Datensatz: {text[:100]}...")
+                                # Hier könntest du die Daten parsen
+                                
+                        except:
+                            continue
+                            
+            except Exception as e:
+                print(f"🔍 Container-Suche Fehler: {e}")
+
+            # Versuch 2: Tabellen-Suche (falls doch vorhanden)
+            try:
+                print("🔍 Suche nach Tabellen...")
+                
+                # Warte länger auf Tabellen
+                for attempt in range(5):
+                    await asyncio.sleep(2)
+                    tables = await page.query_selector_all("table")
+                    if tables:
+                        print(f"✅ {len(tables)} Tabellen gefunden")
+                        break
+                    print(f"🔍 Versuch {attempt+1}/5: Noch keine Tabellen...")
+
+                rows = await page.query_selector_all("table tbody tr, table tr")
+                print(f"🔍 {len(rows)} Zeilen gefunden")
+
+                for i, row in enumerate(rows):
+                    try:
+                        cols = await row.query_selector_all("td, th")
+                        if len(cols) < 3:  # Mindestens 3 Spalten erwartet
+                            continue
+                            
+                        # Extrahiere Daten aus den Spalten
+                        col_texts = []
+                        for col in cols:
+                            text = (await col.inner_text()).strip()
+                            col_texts.append(text)
+                        
+                        print(f"🔍 Zeile {i+1}: {col_texts}")
+                        
+                        # Wenn genug Daten vorhanden, als Störung behandeln
+                        if len(col_texts) >= 6 and any(col_texts[0]):  # ID nicht leer
+                            stoerungen.append({
+                                "id": col_texts[0],
+                                "typ": col_texts[1] if len(col_texts) > 1 else "Unbekannt",
+                                "ort": col_texts[2] if len(col_texts) > 2 else "Unbekannt",
+                                "region": col_texts[3] if len(col_texts) > 3 else "Unbekannt",
+                                "wirkung": col_texts[4] if len(col_texts) > 4 else "Unbekannt",
+                                "ursache": col_texts[5] if len(col_texts) > 5 else "Unbekannt",
+                                "gueltig_von": col_texts[6] if len(col_texts) > 6 else "Jetzt",
+                                "gueltig_bis": col_texts[7] if len(col_texts) > 7 else "Unbekannt",
+                            })
+                            print(f"✅ Störung hinzugefügt: {col_texts[0]}")
+
+                    except Exception as row_e:
+                        print(f"❌ Fehler bei Zeile {i+1}: {row_e}")
+                        continue
+
+            except Exception as e:
+                print(f"🔍 Tabellen-Suche Fehler: {e}")
+
+            # Debug: Seitencontent ausgeben
+            if not stoerungen:
+                print("🔍 Keine Störungen gefunden - Debug-Ausgabe:")
+                try:
+                    body_text = await page.inner_text("body")
+                    relevant_text = [line for line in body_text.split('\n') 
+                                   if any(word in line.lower() for word in ['störung', 'baustell', 'ice', 'rb', 'sperrung'])]
+                    if relevant_text:
+                        print("🔍 Relevante Zeilen gefunden:")
+                        for line in relevant_text[:10]:
+                            print(f"  📝 {line.strip()}")
+                    else:
+                        print("🔍 Keine relevanten Zeilen im Body-Text")
                 except:
                     pass
+
+            # Nachrichten für gefundene Störungen erstellen
+            for s in stoerungen:
+                # Emoji basierend auf Typ
+                if "baustell" in s["typ"].lower():
+                    emoji = "🚧"
+                elif "störung" in s["typ"].lower():
+                    emoji = "🚨"
+                else:
+                    emoji = "⚠️"
                 
-                # Versuch 2: Button-Selektor
-                if not tab_clicked:
-                    try:
-                        await page.click("button:has-text('Störungen')", timeout=3000, force=True)
-                        tab_clicked = True
-                        print("✅ Störungen-Tab (button) aktiviert")
-                    except:
-                        pass
+                s["discord_text"] = (
+                    f"{emoji} **Neue Bahn-{s['typ']}!**\n"
+                    f"🆔 {s['id']}\n📍 {s['ort']}\n🗺️ {s['region']}\n"
+                    f"🚦 {s['wirkung']}\n📋 {s['ursache']}\n"
+                    f"⏰ {s['gueltig_von']} → {s['gueltig_bis']}"
+                )
                 
-                # Versuch 3: Tab-Selektor
-                if not tab_clicked:
-                    try:
-                        await page.click("[role='tab']:has-text('Störungen')", timeout=3000, force=True)
-                        tab_clicked = True
-                        print("✅ Störungen-Tab (role=tab) aktiviert")
-                    except:
-                        pass
-                
-                if not tab_clicked:
-                    print("⚠️ Störungen-Tab nicht gefunden - verwende Standard-Ansicht")
-                    
-            except Exception as e: 
-                print(f"⚠️ Fehler beim Tab-Wechsel: {e}")
+                s["bsky_text"] = (
+                    f"{emoji} Neue Bahn-{s['typ']}!\n"
+                    f"ID: {s['id']}\nOrt: {s['ort']}\nRegion: {s['region']}\n"
+                    f"Wirkung: {s['wirkung']}\nUrsache: {s['ursache']}\n"
+                    f"⏰ {s['gueltig_von']} → {s['gueltig_bis']}"
+                )
 
-            # Warten auf Tabelle
-            print("🔍 Warte auf Tabelle...")
-            await asyncio.sleep(8)  # Länger warten für Tab-Wechsel
-
-            # Debug: Schaue welche Tabs verfügbar sind
-            try:
-                tabs = await page.query_selector_all("button, [role='tab']")
-                tab_texts = []
-                for tab in tabs[:10]:  # Nur erste 10
-                    try:
-                        text = await tab.inner_text()
-                        if text.strip():
-                            tab_texts.append(text.strip())
-                    except:
-                        pass
-                print(f"🔍 Verfügbare Tabs/Buttons: {tab_texts}")
-            except:
-                pass
-
-            # Tabelle laden
-            rows = []
-            for i in range(8):  # Mehr Versuche
-                print(f"🔍 Versuch {i+1}/8: Lade Tabellenzeilen...")
-                rows = await page.query_selector_all("table tbody tr")
-                if rows: 
-                    print(f"✅ {len(rows)} Zeilen gefunden")
-                    break
-                await asyncio.sleep(3)
-
-            if not rows:
-                print("❌ Keine Tabellenzeilen gefunden!")
-                # Debug: Schaue was auf der Seite ist
-                try:
-                    # Schaue nach allen Tabellen
-                    tables = await page.query_selector_all("table")
-                    print(f"🔍 {len(tables)} Tabellen gefunden")
-                    
-                    # Schaue nach allen TR-Elementen
-                    all_rows = await page.query_selector_all("tr")
-                    print(f"🔍 {len(all_rows)} TR-Elemente insgesamt gefunden")
-                    
-                    # Schaue nach anderen möglichen Container
-                    cards = await page.query_selector_all(".card, .item, .entry")
-                    print(f"🔍 {len(cards)} Card/Item-Elemente gefunden")
-                    
-                except Exception as debug_e:
-                    print(f"🔍 Debug-Fehler: {debug_e}")
-
-            processed_count = 0
-            for i, row in enumerate(rows):
-                try:
-                    cols = await row.query_selector_all("td")
-                    if len(cols) < 8: 
-                        print(f"🔍 Zeile {i+1}: Nur {len(cols)} Spalten, überspringe...")
-                        continue
-                        
-                    id_text     = (await cols[0].inner_text()).strip()
-                    typ         = (await cols[1].inner_text()).strip()
-                    ort         = (await cols[2].inner_text()).strip()
-                    region      = (await cols[3].inner_text()).strip()
-                    wirkung     = (await cols[4].inner_text()).strip()
-                    ursache     = (await cols[5].inner_text()).strip()
-                    gueltig_von = (await cols[6].inner_text()).strip()
-                    gueltig_bis = (await cols[7].inner_text()).strip()
-
-                    print(f"🔍 Zeile {i+1}: ID={id_text}, Typ={typ}, Ort={ort}")
-
-                    # Nur Streckenruhe überspringen - Baustellen sind auch wichtig!
-                    if typ.lower() == "streckenruhe":
-                        print(f"🔍 Überspringe {typ}: {id_text}")
-                        continue
-                    
-                    # Für Baustellen anderen Emoji verwenden
-                    emoji = "🚧" if typ.lower() == "baustelle" else "🚨"
-
-                    stoerungen.append({
-                        "id": id_text,
-                        "typ": typ,
-                        "ort": ort,
-                        "region": region,
-                        "wirkung": wirkung,
-                        "ursache": ursache,
-                        "gueltig_von": gueltig_von,
-                        "gueltig_bis": gueltig_bis,
-                        "discord_text": (
-                            f"{emoji} **Neue Bahn-{typ}!**\n"
-                            f"🆔 {id_text}\n📍 {ort}\n🗺️ {region}\n"
-                            f"🚦 {wirkung}\n📋 {ursache}\n"
-                            f"⏰ {gueltig_von} → {gueltig_bis}"
-                        ),
-                        "bsky_text": (
-                            f"{emoji} Neue Bahn-{typ}!\n"
-                            f"ID: {id_text}\nOrt: {ort}\nRegion: {region}\n"
-                            f"Wirkung: {wirkung}\nUrsache: {ursache}\n"
-                            f"⏰ {gueltig_von} → {gueltig_bis}"
-                        )
-                    })
-                    processed_count += 1
-                    print(f"✅ {typ} hinzugefügt: {id_text}")
-                except Exception as e: 
-                    print(f"❌ Fehler bei Zeile {i+1}: {e}")
-                    continue
-
-            print(f"🔍 Scraping abgeschlossen: {processed_count} Einträge gefunden")
+            print(f"🔍 Scraping abgeschlossen: {len(stoerungen)} Einträge gefunden")
 
         except Exception as e:
             print("❌ Fehler beim Scraping:", e)
@@ -369,7 +303,7 @@ async def check_and_post():
             await send_discord(s["discord_text"])
             send_bluesky(s["bsky_text"])
 
-            state[s["id"]] = {"typ": s["typ"], "ort": s["ort"]}  # Mehr Info speichern
+            state[s["id"]] = {"typ": s["typ"], "ort": s["ort"]}
             new_found = True
 
     # Behobene/abgeschlossene Einträge finden
@@ -402,7 +336,7 @@ async def check_and_post():
 async def on_ready():
     print(f"🤖 Bot eingeloggt als {bot.user}")
     await check_and_post()
-    await bot.close()  # wichtig, sonst hängt GitHub Action ewig
+    await bot.close()
 
 # ---------------- Start ----------------
 if __name__ == "__main__":
