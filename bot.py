@@ -5,6 +5,90 @@ from discord.ext import commands
 from playwright.async_api import async_playwright
 from atproto import Client
 
+# ============== DEBUG TEST (TEMPORÄR) ==============
+print("🔍 STARTING DEBUG TEST...")
+
+async def debug_test():
+    print("🔍 Testing strecken-info.de structure...")
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True, args=["--no-sandbox"])
+        page = await browser.new_page()
+        
+        try:
+            print("🔍 Loading page...")
+            await page.goto("https://strecken-info.de/", timeout=60000)
+            await page.wait_for_load_state("networkidle", timeout=20000)
+            
+            title = await page.title()
+            print(f"📄 Title: {title}")
+            
+            # Test basic elements
+            body_text = await page.inner_text("body")
+            print(f"📝 Body text length: {len(body_text)} chars")
+            print(f"📝 First 300 chars: {body_text[:300]}...")
+            
+            # Test button finding
+            buttons = await page.query_selector_all("button")
+            print(f"🔘 {len(buttons)} buttons found")
+            
+            for i, btn in enumerate(buttons[:8]):
+                try:
+                    text = await btn.inner_text()
+                    if text.strip():
+                        print(f"  Button {i+1}: '{text.strip()}'")
+                except:
+                    pass
+            
+            # Test table finding  
+            tables = await page.query_selector_all("table")
+            print(f"📊 {len(tables)} tables found")
+            
+            all_rows = await page.query_selector_all("tr")
+            print(f"📋 {len(all_rows)} total rows found")
+            
+            tbody_rows = await page.query_selector_all("table tbody tr")
+            print(f"📋 {len(tbody_rows)} tbody rows found")
+            
+            # Test specific keywords
+            keywords = ["Störung", "störung", "Einschränkung", "Baustelle", "Filter"]
+            for keyword in keywords:
+                count = body_text.lower().count(keyword.lower())
+                print(f"🔍 '{keyword}': {count} occurrences")
+            
+            # Test filter elements
+            filter_elements = await page.query_selector_all("*:has-text('Filter')")
+            print(f"🔍 {len(filter_elements)} 'Filter' elements")
+            
+            # Test if we can click filter
+            try:
+                filter_btn = await page.query_selector("button:has-text('Filter')")
+                if filter_btn:
+                    print("✅ Filter button found and clickable")
+                    await filter_btn.click(force=True)
+                    await asyncio.sleep(3)
+                    
+                    # Check checkboxes after filter opened
+                    checkboxes = await page.query_selector_all("input[type='checkbox']")
+                    print(f"☑️ {len(checkboxes)} checkboxes found after filter click")
+                    
+                else:
+                    print("❌ No Filter button found")
+            except Exception as filter_e:
+                print(f"❌ Filter click failed: {filter_e}")
+            
+        except Exception as e:
+            print(f"❌ Test error: {e}")
+            traceback.print_exc()
+        finally:
+            await browser.close()
+
+# Führe Debug-Test aus und beende dann
+asyncio.run(debug_test())
+print("🔍 DEBUG TEST COMPLETE - EXITING BEFORE NORMAL BOT CODE")
+exit(0)
+
+# ============== NORMALER BOT CODE (wird nicht erreicht) ==============
+
 # ---------------- Konfiguration ----------------
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID    = int(os.getenv("CHANNEL_ID", "0"))
