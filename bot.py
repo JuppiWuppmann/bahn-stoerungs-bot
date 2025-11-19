@@ -39,25 +39,17 @@ def is_valid_stoerung(id_text, typ):
     if not typ or typ.strip().lower() in ["typ", "type", "typ\n0"]:
         return False
     
-    # Nur bestimmte Typen erlauben
-    valid_types = ["störung", "baustelle", "sperrung", "einschränkung"]
+    # Nur Störungen erlauben - keine Baustellen
+    valid_types = ["störung", "sperrung"]  # Baustelle entfernt
     if not any(vtype in typ.lower() for vtype in valid_types):
         return False
         
     return True
 
 def should_notify_immediately(typ, wirkung):
-    """Bestimme ob sofort gepostet werden soll (für akute Störungen)"""
-    # Akute Störungen sofort posten
-    if "störung" in typ.lower():
-        return True
-    
-    # Totalsperrungen auch sofort posten
-    if "totalsperrung" in wirkung.lower():
-        return True
-        
-    # Baustellen können warten (weniger spam)
-    return False
+    """Alle Störungen haben hohe Priorität - keine Baustellen mehr"""
+    # Alle Störungen sofort posten (da wir nur noch Störungen haben)
+    return True
 
 # ---------------- Scraper ----------------
 async def scrape_stoerungen():
@@ -91,39 +83,114 @@ async def scrape_stoerungen():
             except Exception as e: 
                 print(f"⚠️ Filter-Button nicht gefunden: {e}")
 
-            # BEIDE Filter aktivieren: Störungen UND Baustellen
+            # NUR Störungen aktivieren - mit verbessertem Debugging
             try:
-                print("🔍 Aktiviere Filter...")
+                print("🔍 Aktiviere nur Störungen-Filter...")
                 
-                await page.wait_for_selector("input[type='checkbox']", timeout=5000)
-                checkboxes = await page.query_selector_all("input[type='checkbox']")
-                
-                for cb in checkboxes:
+                try:
+                    await page.wait_for_selector("input[type='checkbox']", timeout=5000)
+                    print("✅ Checkboxes gefunden")
+                except Exception as wait_e:
+                    print(f"❌ Keine Checkboxes gefunden: {wait_e}")
+                    # Versuche alternative Selektoren
                     try:
-                        # Schaue nach dem Parent-Element für den Text
-                        parent = await cb.query_selector("xpath=..")
-                        if parent:
-                            parent_text = await parent.inner_text()
+                        checkboxes = await page.query_selector_all("input")
+                        print(f"🔍 {len(checkboxes)} Input-Elemente gefunden (Fallback)")
+                    except:
+                        print("❌ Auch keine Input-Elemente gefunden")
+                        raise wait_e
+                
+                checkboxes = await page.query_selector_all("input[type='checkbox']")
+                print(f"🔍 {len(checkboxes)} Checkboxen gefunden")
+                
+                if len(checkboxes) == 0:
+                    print("⚠️ Keine Checkboxes zum Bearbeiten - verwende Standard-Filter")
+                    # Versuche direkt auf Text-Elemente zu klicken
+                    try:
+                        # Versuche Störungen zu aktivieren via Label-Click
+                        stoerung_label = await page.query_selector("text=Störungen")
+                        if stoerung_label:
+                            await stoerung_label.click(force=True)
+                            print("✅ Störungen via Label aktiviert")
+                    except:
+                        pass
+                else:
+                    filter_actions = []
+                    
+                    for i, cb in enumerate(checkboxes):
+                        try:
+                            # Verschiedene Wege, um den Text zu finden
+                            parent_text = ""
                             
-                            # Störungen und Baustellen aktivieren, Streckenruhe deaktivieren
+                            # Methode 1: Parent-Element
+                            try:
+                                parent = await cb.query_selector("xpath=..")
+                                if parent:
+                                    parent_text = await parent.inner_text()
+                            except:
+                                pass
+                            
+                            # Methode 2: Nächstes Sibling (Label)
+                            if not parent_text.strip():
+                                try:
+                                    sibling = await cb.query_selector("xpath=following-sibling::*[1]")
+                                    if sibling:
+                                        parent_text = await sibling.inner_text()
+                                except:
+                                    pass
+                            
+                            # Methode 3: Vorheriges Sibling
+                            if not parent_text.strip():
+                                try:
+                                    sibling = await cb.query_selector("xpath=preceding-sibling::*[1]")
+                                    if sibling:
+                                        parent_text = await sibling.inner_text()
+                                except:
+                                    pass
+                            
+                            is_checked = await cb.is_checked()
+                            
+                            print(f"🔍 Checkbox {i+1}: '{parent_text.strip()}' - Status: {'✓' if is_checked else '○'}")
+                            
+                            # NUR Störungen aktivieren, alles andere deaktivieren
                             if "störung" in parent_text.lower():
-                                if not await cb.is_checked():
+                                if not is_checked:
                                     await cb.click(force=True)
-                                    print("✅ Störungen aktiviert")
+                                    filter_actions.append("✅ Störungen aktiviert")
+                                else:
+                                    filter_actions.append("✅ Störungen bereits aktiv")
                             elif "baustell" in parent_text.lower():
-                                if not await cb.is_checked():
+                                if is_checked:
                                     await cb.click(force=True)
-                                    print("✅ Baustellen aktiviert")
+                                    filter_actions.append("❌ Baustellen deaktiviert")
+                                else:
+                                    filter_actions.append("❌ Baustellen bereits deaktiv")
                             elif "streckenruhe" in parent_text.lower():
-                                if await cb.is_checked():
+                                if is_checked:
                                     await cb.click(force=True)
-                                    print("❌ Streckenruhe deaktiviert")
+                                    filter_actions.append("❌ Streckenruhe deaktiviert")
+                                else:
+                                    filter_actions.append("❌ Streckenruhe bereits deaktiv")
                                     
-                    except Exception as cb_e:
-                        continue
+                        except Exception as cb_e:
+                            print(f"❌ Fehler bei Checkbox {i+1}: {cb_e}")
+                            continue
+                    
+                    # Zeige alle Filter-Aktionen
+                    for action in filter_actions:
+                        print(action)
+                    
+                    if not filter_actions:
+                        print("⚠️ Keine Filter-Aktionen durchgeführt - möglicherweise andere Checkbox-Struktur")
+                
+                # Warten nach Filter-Änderungen
+                print("🔍 Warte nach Filter-Änderungen...")
+                await asyncio.sleep(3)
 
             except Exception as e: 
                 print(f"⚠️ Filter-Aktivierung fehlgeschlagen: {e}")
+                import traceback
+                traceback.print_exc()
 
             # Auf "Einschränkungen" Tab wechseln
             try:
@@ -171,7 +238,19 @@ async def scrape_stoerungen():
                     
                     # Validierung der Daten
                     if not is_valid_stoerung(id_text, typ):
-                        print(f"🔍 Zeile {i+1} übersprungen (Header/Invalid): {id_text}")
+                        print(f"🔍 Zeile {i+1} übersprungen (Header/Invalid): ID={id_text}, Typ={typ}")
+                        skipped_count += 1
+                        continue
+                    
+                    # Extra Check: Baustellen explizit rausfiltern
+                    if "baustell" in typ.lower():
+                        print(f"❌ Zeile {i+1} übersprungen (Baustelle): ID={id_text}, Typ={typ}")
+                        skipped_count += 1
+                        continue
+                    
+                    # Extra Check: Baustellen explizit rausfiltern
+                    if "baustell" in typ.lower():
+                        print(f"❌ Zeile {i+1} übersprungen (Baustelle): ID={id_text}, Typ={typ}")
                         skipped_count += 1
                         continue
                     
